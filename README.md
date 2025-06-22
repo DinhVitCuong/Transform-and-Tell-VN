@@ -101,6 +101,20 @@ tar -zxf data/goodnews/images_processed.tar.gz -C data/goodnews/
 # We are now ready to train the models!
 ```
 
+### ViWiki dataset
+
+If you are working with the ViWiki data provided as simple JSON files
+(`train.json`, `val.json` and `test.json`), use the helper script
+`viwiki_split_converter.py` to create the `splits.json`, `articles.json`
+and `objects.json` files expected by
+[`ViWiki_face_ner_match.py`](tell/data/dataset_readers/ViWiki_face_ner_match.py).
+
+```sh
+python scripts/viwiki_split_converter.py /path/to/raw_json /path/to/output_dir
+```
+
+Images will be copied into `output_dir` if you supply the `--image-out` flag.
+
 You can see an example of how we read the NYTimes800k samples from the MongoDB
 database [here](tell/data/dataset_readers/nytimes_faces_ner_matched.py).
 Here's a minimum working example in Python:
