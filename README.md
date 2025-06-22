@@ -42,7 +42,7 @@ Please cite with the following BibTeX:
 ## Requirements
 
 ```sh
-# Install Anaconda for Python and then create a dedicated environment.
+# Install Anaconda for Python (>=3.9) and then create a dedicated environment.
 # This will make it easier to reproduce our experimental numbers.
 conda env create -f environment.yml
 conda activate tell
