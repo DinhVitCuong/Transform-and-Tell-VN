@@ -5,30 +5,29 @@ channels:
   - conda-forge
 dependencies:
   - autopep8=1.4.4
-  - cudatoolkit=10.2.89
+  - cudatoolkit=11.6
   - cython=0.29.15
-  - ipykernel=5.1.4
-  - matplotlib=3.1.3
+  - ipykernel
+  - matplotlib
   - mypy=0.750
-  - numpy=1.17.2
-  - pip=20.0.2
-  - pillow=7.1.2
-  - pytorch=1.5.1
-  - python=3.7.4
+  - numpy
+  - pip
+  - pillow
+  - pytorch=1.12.1
+  - python=3.8
   - pyyaml=5.1.2
-  - torchvision=0.6.1
+  - torchvision=0.13.1
   - pip:
-      - allennlp==0.9.0
+      - allennlp==2.10.1
       - beautifulsoup4==4.8.2
-      - django==3.0.5
-      - djangorestframework==3.11.0
-      - django-cors-headers==3.2.1
+      - django==3.2
+      - djangorestframework==3.14.0
+      - django-cors-headers==3.13.0
       - docopt==0.6.2
       - langdetect==1.0.7
       - nltk==3.4.5
       - overrides==2.8.0
       - opencv-python==4.2.0.34
-      - Pillow==7.0.0
       - ptvsd==4.3.2
       - pudb==2019.2
       - git+git://github.com/salaniz/pycocoevalcap.git@a6b79b0fbd0f4f293634831e4e09405de2abc955
@@ -43,3 +42,4 @@ dependencies:
       - termcolor==1.1.0
       - tqdm==4.43.0
       - transformers==2.5.1
+      - facenet-pytorch
