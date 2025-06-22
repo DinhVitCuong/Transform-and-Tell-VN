@@ -6,7 +6,7 @@ channels:
 dependencies:
   - autopep8=1.4.4
   - cudatoolkit=11.6
-  - cython=0.29.15
+  - cython>=0.29.21
   - ipykernel
   - matplotlib
   - mypy=0.750
@@ -15,7 +15,7 @@ dependencies:
   - pillow
   - pytorch=1.12.1
   - python=3.9
-  - pyyaml=5.1.2
+  - pyyaml>=5.4
   - torchvision=0.13.1
   - pip:
       - allennlp==2.10.1
@@ -30,16 +30,16 @@ dependencies:
       - opencv-python
       - ptvsd
       - pudb==2019.2
-      - git+git://github.com/salaniz/pycocoevalcap.git@a6b79b0fbd0f4f293634831e4e09405de2abc955
+      # - git+git://github.com/salaniz/pycocoevalcap.git@a6b79b0fbd0f4f293634831e4e09405de2abc955
       - pymongo
       - pyzmq
       - gunicorn==20.0.4
       - schema==0.7.1
-      - spacy==3.7.2
+      - spacy<3.4
       - stop-words==2018.7.23
       - tensorboard>=2.15
       - textstat==0.6.0
-      - termcolor>=2.3
+      - termcolor==1.1.0
       - tqdm
-      - transformers==4.40.2
+      - transformers<4.21
       - facenet-pytorch
