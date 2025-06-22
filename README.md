@@ -50,17 +50,13 @@ conda activate tell
 # This step is only needed if you want to use the Jupyter notebook
 python -m ipykernel install --user --name tell --display-name "tell"
 
-# Our Pytorch uses CUDA 10.2. Ensure that CUDA_HOME points to the right
-# CUDA version. Chagne this depending on where you installed CUDA.
-export CUDA_HOME=/usr/local/cuda-10.2
 
-# We also pin the apex version, which is used for mixed precision training
-cd libs/apex
-git submodule init && git submodule update .
-pip install -v --no-cache-dir --global-option="--pyprof" --global-option="--cpp_ext" --global-option="--cuda_ext" ./
+# This environment targets CUDA 11.6. Ensure that CUDA_HOME points to the
+# correct installation.
+export CUDA_HOME=/usr/local/cuda-11.6
 
 # Install our package
-cd ../.. && python setup.py develop
+python setup.py develop
 
 # Spacy is used to calcuate some of the evaluation metrics
 spacy download en_core_web_lg
