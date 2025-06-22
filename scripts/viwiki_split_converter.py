@@ -36,9 +36,10 @@ def load_split(path: str) -> Dict[str, dict]:
 
 
 def convert_items(items: Dict[str, dict], split: str, image_out: str = None
-                   ) -> Tuple[List[dict], List[dict]]:
+                   ) -> Tuple[List[dict], Dict[str, dict]]:
     samples = []
-    articles = []
+    articles = {}
+
     for sid, item in items.items():
         sample_id = str(sid)
         if image_out:
@@ -58,8 +59,7 @@ def convert_items(items: Dict[str, dict], split: str, image_out: str = None
             "caption_ner": [[]],
             "context_ner": [],
         }
-
-        articles.append(article)
+        articles[sample_id] = article
 
         # Build split sample
         samples.append({
@@ -82,8 +82,7 @@ def main() -> None:
     os.makedirs(args.output_dir, exist_ok=True)
 
     all_samples: List[dict] = []
-
-    all_articles: List[dict] = []
+    article_map: Dict[str, dict] = {}
 
 
     for split_name in ["train", "val", "test"]:
@@ -91,16 +90,14 @@ def main() -> None:
         items = load_split(path)
         samples, articles = convert_items(items, split_name, args.image_out)
         all_samples.extend(samples)
-
-        all_articles.extend(articles)
+        article_map.update(articles)
 
 
     with open(os.path.join(args.output_dir, "splits.json"), "w", encoding="utf-8") as f:
         json.dump(all_samples, f, ensure_ascii=False, indent=2)
 
     with open(os.path.join(args.output_dir, "articles.json"), "w", encoding="utf-8") as f:
-
-        json.dump(all_articles, f, ensure_ascii=False, indent=2)
+        json.dump(list(article_map.values()), f, ensure_ascii=False, indent=2)
 
 
     # create empty objects.json for convenience
