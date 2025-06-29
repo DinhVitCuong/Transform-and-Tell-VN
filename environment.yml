@@ -10,7 +10,7 @@ dependencies:
   - ipykernel
   - matplotlib
   - mypy=0.750
-  - numpy
+  - numpy<2.0
   - pip
   - pillow
   - pytorch=1.12.1

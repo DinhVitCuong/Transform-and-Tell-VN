@@ -1,0 +1,7 @@
+1) Use a different env for preprocess ViWiki
+
+torch 2.2.2+cu188 IS VERY IMPORTANT AND INSTALL FIRST
+torchvision and torchaudio as follow up
+then pip install facenet_pytorch transformers vncorenlp ultralytics
+
+2) 
