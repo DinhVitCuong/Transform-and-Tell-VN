@@ -19,11 +19,11 @@ with entries of the form::
 For each item this script will:
 
 * copy the image to ``--image-out`` (if provided)
-* detect faces with **MTCNN** and extract **FaceNet** embeddings
-* detect objects using **YoloV3** and encode them with **ResNet152**
+* detect faces with **MTCNN** and extract **FaceNet** embeddings with max faces = 4
+* detect objects using **YoloV8** and encode them with **ResNet152** We filter out objects with a confidence less than 0.3 and select up to 64 objects
 * run **VnCoreNLP** to obtain ``caption_ner`` and ``context_ner``
 * extract a global image feature with **ResNet152**
-* embed the article text using a **RoBERTa** model
+* embed the article text using a **RoBERTa** model (PhoBERT for Vietnamese)
 
 The resulting ``splits.json``, ``articles.json`` and ``objects.json`` match the
 schema in :mod:`tell.data.dataset_readers.ViWiki_face_ner_match`.  ``splits``
@@ -57,13 +57,12 @@ from transformers import AutoTokenizer, AutoModel
 # from tell.yolov3.utils.utils import non_max_suppression, scale_coords
 # from tell.yolov3.utils.datasets import letterbox
 from facenet_pytorch import MTCNN, InceptionResnetV1
-from torchvision.models import resnet152
+from torchvision.models import resnet152, ResNet152_Weights
 from torchvision.transforms import Compose, Normalize, ToTensor
 from ultralytics import YOLO
 
 
 def setup_models(device: torch.device, vncorenlp_path: str):
-    # VnCoreNLP thì vẫn giữ nguyên
     py_vncorenlp.download_model(save_dir=vncorenlp_path)
     vncore = py_vncorenlp.VnCoreNLP(annotators=["wseg", "pos", "ner", "parse"], save_dir=vncorenlp_path)
     print("LOADED VNCORENLP!")
@@ -78,14 +77,15 @@ def setup_models(device: torch.device, vncorenlp_path: str):
     # children() trả về: conv1, bn1, relu, maxpool, layer1…layer4, avgpool, fc
     # [-2] loại avgpool, [-1] loại fc
     resnet = nn.Sequential(*list(base.children())[:-2]).eval().to(device)
+    
+    resnet_object = nn.Sequential(*list(base.children())[:-1]).eval().to(device)
     print("LOADED ResNet152!")
 
-    # Object detection: YOLOv5 example
-    yolo = YOLO("yolov5su.pt")  # tải weight tự động lần đầu
+    yolo = YOLO("yolov8m.pt")  # tải weight tự động lần đầu
     yolo.fuse()                # fuse model for speed
     print("LOADED YOLOv5!")
     phoBERTlocal = "/data/npl/ICEK/TnT/phoBERT/phobert-base"
-    # Load cả tokenizer và model từ cùng một thư mục để vocab size khớp
+
     tokenizer = AutoTokenizer.from_pretrained(phoBERTlocal, local_files_only=True)
     roberta     = AutoModel    .from_pretrained(phoBERTlocal, use_safetensors=True, local_files_only=True).to(device).eval()
     print("LOADED phoBERT!")
@@ -100,6 +100,7 @@ def setup_models(device: torch.device, vncorenlp_path: str):
         "mtcnn": mtcnn,
         "facenet": facenet,
         "resnet": resnet,
+        "resnet_object": resnet_object,
         "roberta": roberta,
         "tokenizer": tokenizer,
         "yolo": yolo,
@@ -146,23 +147,30 @@ def extract_entities(text: str,
                     entities[ent_type].add(' '.join(ent_text.split('_')).strip("•"))
     return {typ: sorted(vals) for typ, vals in entities.items()}
 
-def detect_faces(img: Image.Image, mtcnn: MTCNN, facenet: InceptionResnetV1, device: torch.device) -> dict:
+def detect_faces(img: Image.Image, mtcnn: MTCNN, facenet: InceptionResnetV1, device: torch.device, max_faces=4) -> dict:
     with torch.no_grad():
         faces, probs = mtcnn(img, return_prob=True)
     if faces is None or len(faces) == 0:
         return {"n_faces": 0, "embeddings": [], "detect_probs": []}
-    faces = faces.to(device)
+    if isinstance(probs, torch.Tensor):
+        probs = probs.tolist()
+    facelist = sorted(zip(faces, probs), key=lambda x: x[1], reverse=True)
+    facelist = facelist[:max_faces]
+
+    face_tensors = torch.stack([fp[0] for fp in facelist]).to(device)  # (k,3,160,160)
+    probs_top    = [float(fp[1]) for fp in facelist]
+
     with torch.no_grad():
-        embeds = facenet(faces)
+        embeds = facenet(face_tensors).cpu().tolist()  # List[k][512]
     return {
         "n_faces": len(embeds),
-        "embeddings": embeds.cpu().tolist(),
+        "embeddings": embeds,
         "detect_probs": probs[: len(embeds)].tolist(),
     }
 
 def detect_objects(image_path: str, model, resnet, preprocess, device):
     img = Image.open(image_path).convert("RGB")
-    results = model(image_path)        # returns list[Results]
+    results = model(image_path, conf=0.3, iou=0.45, max_det=64)       # returns list[Results]
     detections = []
     if not results:
         return detections
@@ -178,7 +186,9 @@ def detect_objects(image_path: str, model, resnet, preprocess, device):
         crop = img.crop((x1, y1, x2, y2)).resize((224,224))
         tensor = preprocess(crop).unsqueeze(0).to(device)
         with torch.no_grad():
-            feat = resnet(tensor).squeeze().cpu().tolist()
+            feat_tensor = resnet(tensor).squeeze()   # still a Tensor
+        # convert to plain Python list:
+        feat = feat_tensor.cpu().tolist()
         detections.append({
             "label": model.names[cls],
             "confidence": conf,
@@ -189,8 +199,11 @@ def detect_objects(image_path: str, model, resnet, preprocess, device):
 def image_feature(img: Image.Image, resnet: torch.nn.Module, preprocess: Compose, device: torch.device) -> List[float]:
     tensor = preprocess(img).unsqueeze(0).to(device)
     with torch.no_grad():
-        feat = resnet(tensor)
-    return feat.squeeze(0).cpu().tolist()
+        fmap = resnet(tensor)                         # (1,2048,7,7)
+    fmap = fmap.squeeze(0)                            # (2048,7,7)
+    # move channel to last dim → (7,7,2048), then flatten to (49,2048)
+    patches = fmap.permute(1, 2, 0).reshape(-1, 2048)  # (49,2048)
+    return patches.cpu().tolist() 
 
 def roberta_embed(
     text: str,
@@ -208,7 +221,6 @@ def roberta_embed(
     """
     sentences = re.split(r'(?<=[\.!?])\s+', text.strip())
     vecs = []
-    # loop từng câu nhỏ
     for sent in sentences:
         sent = sent.strip()
         if not sent:
@@ -216,11 +228,9 @@ def roberta_embed(
         if sent.count('·') >= 5: 
             continue
 
-        # 1) word-segment
         seg_sents = segmenter.word_segment(sent)
         seg_text  = " ".join(seg_sents)
 
-        # 2) tokenize và đưa lên device
         batch = tokenizer(
             seg_text,
             return_tensors="pt",
@@ -229,13 +239,11 @@ def roberta_embed(
         )
         batch = {k: v.to(device) for k, v in batch.items()}
 
-        # 3) forward + catch lỗi
         try:
             with torch.no_grad():
                 out = model(**batch).last_hidden_state  # (1, L, D)
         except RuntimeError as e:
             print(f"[WARN] RoBERTa GPU failed on sent: {repr(sent)} → {e}")
-            # fallback CPU
             try:
                 cpu_batch = {k: v.cpu() for k, v in batch.items()}
                 model_cpu = model.to("cpu")
@@ -246,15 +254,12 @@ def roberta_embed(
                 print(f"[WARN] RoBERTa CPU also failed, skip sent → {e2}")
                 continue
 
-        # 4) mean pooling câu
         sent_vec = out.mean(dim=1).squeeze(0)  # (D,)
         vecs.append(sent_vec)
 
-    # nếu không có câu hợp lệ nào, trả zero‐vector
     if not vecs:
         return [0.0] * model.config.hidden_size
 
-    # 5) stack và mean‐pool across câu
     stacked = torch.stack(vecs, dim=0)     # (n_sent, D)
     doc_vec = stacked.mean(dim=0)         # (D,)
     return doc_vec.cpu().tolist()
@@ -275,6 +280,7 @@ def convert_items(items: Dict[str, dict], split: str, models: dict, image_out: s
     mtcnn = models["mtcnn"]
     facenet = models["facenet"]
     resnet = models["resnet"]
+    resnet_object = models["resnet_object"]
     yolo = models["yolo"]
     tokenizer = models["tokenizer"]
     roberta = models["roberta"]
@@ -307,7 +313,7 @@ def convert_items(items: Dict[str, dict], split: str, models: dict, image_out: s
         ctx_ner = extract_entities(context_txt, vncore)
         face_info = detect_faces(image, mtcnn, facenet, device)
         # obj_feats = detect_objects(img_path, yolo, resnet, device)
-        obj_feats = detect_objects(img_path, yolo, resnet, preprocess, device)
+        obj_feats = detect_objects(img_path, yolo, resnet_object, preprocess, device)
         img_feat = image_feature(image, resnet, preprocess, device)
         art_embed = roberta_embed(context_txt, tokenizer, roberta, vncore, device)
 
