@@ -1,0 +1,380 @@
+"""Convert raw ViWiki JSON files into the format consumed by
+``ViWiki_face_ner_match.py`` and additionally compute the image and text
+features described in that reader's documentation.
+
+The input directory must contain ``train.json``, ``val.json`` and ``test.json``
+with entries of the form::
+
+    {
+        "0": {
+            "image_path": "/path/to/img.jpg",
+            "paragraphs": [...],
+            "scores": [...],
+            "caption": "caption text",
+            "context": ["sentence 1", "sentence 2", ...]
+        },
+        ...
+    }
+
+For each item this script will:
+
+* copy the image to ``--image-out`` (if provided)
+* detect faces with **MTCNN** and extract **FaceNet** embeddings
+* detect objects using **YoloV3** and encode them with **ResNet152**
+* run **VnCoreNLP** to obtain ``caption_ner`` and ``context_ner``
+* extract a global image feature with **ResNet152**
+* embed the article text using a **RoBERTa** model
+
+The resulting ``splits.json``, ``articles.json`` and ``objects.json`` match the
+schema in :mod:`tell.data.dataset_readers.ViWiki_face_ner_match`.  ``splits``
+contains the face embeddings and global image features while object features are
+stored in ``objects.json``.
+"""
+
+import argparse
+import json
+import os
+import shutil
+from typing import Dict, Tuple, List
+from tqdm import tqdm
+from collections import defaultdict
+from typing import List, Dict
+import re
+
+import cv2
+import numpy as np
+import torch
+from PIL import Image
+from torchvision.transforms import Compose, Normalize, ToTensor
+import torch.nn as nn
+
+import py_vncorenlp
+from transformers import AutoTokenizer, AutoModel
+
+# from tell.facenet import MTCNN, InceptionResnetV1
+# from tell.models.resnet import resnet152
+# from tell.yolov3.models import Darknet, load_darknet_weights
+# from tell.yolov3.utils.utils import non_max_suppression, scale_coords
+# from tell.yolov3.utils.datasets import letterbox
+from facenet_pytorch import MTCNN, InceptionResnetV1
+from torchvision.models import resnet152
+from torchvision.transforms import Compose, Normalize, ToTensor
+from ultralytics import YOLO
+
+
+def setup_models(device: torch.device, vncorenlp_path: str):
+    # VnCoreNLP thì vẫn giữ nguyên
+    py_vncorenlp.download_model(save_dir=vncorenlp_path)
+    vncore = py_vncorenlp.VnCoreNLP(annotators=["wseg", "pos", "ner", "parse"], save_dir=vncorenlp_path)
+    print("LOADED VNCORENLP!")
+
+    # Face detection + embedding
+    mtcnn = MTCNN(keep_all=True, device=device)
+    facenet = InceptionResnetV1(pretrained="vggface2").eval().to(device)
+    print("LOADED FaceNet!")
+
+    # Global image feature
+    base = resnet152(pretrained=True).eval().to(device)
+    # children() trả về: conv1, bn1, relu, maxpool, layer1…layer4, avgpool, fc
+    # [-2] loại avgpool, [-1] loại fc
+    resnet = nn.Sequential(*list(base.children())[:-2]).eval().to(device)
+    print("LOADED ResNet152!")
+
+    # Object detection: YOLOv5 example
+    yolo = YOLO("yolov5su.pt")  # tải weight tự động lần đầu
+    yolo.fuse()                # fuse model for speed
+    print("LOADED YOLOv5!")
+    phoBERTlocal = "/data/npl/ICEK/TnT/phoBERT/phobert-base"
+    # Load cả tokenizer và model từ cùng một thư mục để vocab size khớp
+    tokenizer = AutoTokenizer.from_pretrained(phoBERTlocal, local_files_only=True)
+    roberta     = AutoModel    .from_pretrained(phoBERTlocal, use_safetensors=True, local_files_only=True).to(device).eval()
+    print("LOADED phoBERT!")
+    preprocess = Compose([
+        ToTensor(),
+        Normalize(mean=[0.485, 0.456, 0.406],
+                  std=[0.229, 0.224, 0.225])
+    ])
+
+    return {
+        "vncore": vncore,
+        "mtcnn": mtcnn,
+        "facenet": facenet,
+        "resnet": resnet,
+        "roberta": roberta,
+        "tokenizer": tokenizer,
+        "yolo": yolo,
+        "preprocess": preprocess,
+        "device": device,
+    }
+
+def extract_entities(text: str,
+                     model
+                    ) -> Dict[str, List[str]]:
+    """
+    Chia text thành từng câu, chạy NER trên mỗi câu bằng VnCoreNLP,
+    rồi gộp kết quả (loại trùng). Nếu một câu lỗi hoặc không có entity,
+    nó sẽ được bỏ qua.
+    """
+    label_mapping = {
+        "PER":  "PERSON", "B-PER":  "PERSON", "I-PER":  "PERSON",
+        "ORG":  "ORG",    "B-ORG":  "ORG",    "I-ORG":  "ORG",
+        "LOC":  "LOC",    "B-LOC":  "LOC",    "I-LOC":  "LOC",
+        "GPE":  "GPE",    "B-GPE":  "GPE",    "I-GPE":  "GPE",
+        "NORP": "NORP",   "B-NORP": "NORP",   "I-NORP": "NORP",
+        "MISC": "MISC",   "B-MISC": "MISC",   "I-MISC": "MISC",
+    }
+    entities = defaultdict(set)
+    sentences = re.split(r'(?<=[\.!?])\s+', text.strip())
+    if not sentences:
+        return {}
+    for sent in sentences:
+        sent = sent.strip()
+        if not sent:
+            continue
+        try:
+            annotated_text = model.annotate_text(sent)
+        except Exception as e:
+            print(f"Lỗi khi annotating text: {e}")
+            return entities
+
+        for subsent in annotated_text:
+
+            for word in annotated_text[subsent]:
+                ent_type = label_mapping.get(word.get('nerLabel', ''), '')
+                ent_text = word.get('wordForm', '').strip()
+                if ent_type and ent_text:
+                    entities[ent_type].add(' '.join(ent_text.split('_')).strip("•"))
+    return {typ: sorted(vals) for typ, vals in entities.items()}
+
+def detect_faces(img: Image.Image, mtcnn: MTCNN, facenet: InceptionResnetV1, device: torch.device) -> dict:
+    with torch.no_grad():
+        faces, probs = mtcnn(img, return_prob=True)
+    if faces is None or len(faces) == 0:
+        return {"n_faces": 0, "embeddings": [], "detect_probs": []}
+    faces = faces.to(device)
+    with torch.no_grad():
+        embeds = facenet(faces)
+    return {
+        "n_faces": len(embeds),
+        "embeddings": embeds.cpu().tolist(),
+        "detect_probs": probs[: len(embeds)].tolist(),
+    }
+
+def detect_objects(image_path: str, model, resnet, preprocess, device):
+    img = Image.open(image_path).convert("RGB")
+    results = model(image_path)        # returns list[Results]
+    detections = []
+    if not results:
+        return detections
+    res = results[0]                   # take the first Results object
+    # lấy các tensor
+    xyxy   = res.boxes.xyxy.cpu()      # shape (N,4)
+    confs  = res.boxes.conf.cpu()      # shape (N,)
+    classes= res.boxes.cls.cpu()       # shape (N,)
+    for i in range(len(xyxy)):
+        x1, y1, x2, y2 = xyxy[i].tolist()
+        conf = float(confs[i])
+        cls  = int(classes[i])
+        crop = img.crop((x1, y1, x2, y2)).resize((224,224))
+        tensor = preprocess(crop).unsqueeze(0).to(device)
+        with torch.no_grad():
+            feat = resnet(tensor).squeeze().cpu().tolist()
+        detections.append({
+            "label": model.names[cls],
+            "confidence": conf,
+            "feature": feat
+        })
+    return detections
+
+def image_feature(img: Image.Image, resnet: torch.nn.Module, preprocess: Compose, device: torch.device) -> List[float]:
+    tensor = preprocess(img).unsqueeze(0).to(device)
+    with torch.no_grad():
+        feat = resnet(tensor)
+    return feat.squeeze(0).cpu().tolist()
+
+def roberta_embed(
+    text: str,
+    tokenizer,
+    model,
+    segmenter,
+    device: torch.device
+) -> List[float]:
+    """
+    - text: cả đoạn context (có thể rất dài)
+    - tokenizer/model: vinai/phobert-base đã load sẵn
+    - segmenter: VnCoreNLP(tokenize) đã khởi tạo
+    - device: cpu hoặc cuda
+    Trả về: embedding 1-D (hidden_size) cho toàn bộ đoạn text
+    """
+    sentences = re.split(r'(?<=[\.!?])\s+', text.strip())
+    vecs = []
+    # loop từng câu nhỏ
+    for sent in sentences:
+        sent = sent.strip()
+        if not sent:
+            continue
+        if sent.count('·') >= 5: 
+            continue
+
+        # 1) word-segment
+        seg_sents = segmenter.word_segment(sent)
+        seg_text  = " ".join(seg_sents)
+
+        # 2) tokenize và đưa lên device
+        batch = tokenizer(
+            seg_text,
+            return_tensors="pt",
+            truncation=True,
+            max_length=model.config.max_position_embeddings
+        )
+        batch = {k: v.to(device) for k, v in batch.items()}
+
+        # 3) forward + catch lỗi
+        try:
+            with torch.no_grad():
+                out = model(**batch).last_hidden_state  # (1, L, D)
+        except RuntimeError as e:
+            print(f"[WARN] RoBERTa GPU failed on sent: {repr(sent)} → {e}")
+            # fallback CPU
+            try:
+                cpu_batch = {k: v.cpu() for k, v in batch.items()}
+                model_cpu = model.to("cpu")
+                with torch.no_grad():
+                    out = model_cpu(**cpu_batch).last_hidden_state
+                model.to(device)
+            except Exception as e2:
+                print(f"[WARN] RoBERTa CPU also failed, skip sent → {e2}")
+                continue
+
+        # 4) mean pooling câu
+        sent_vec = out.mean(dim=1).squeeze(0)  # (D,)
+        vecs.append(sent_vec)
+
+    # nếu không có câu hợp lệ nào, trả zero‐vector
+    if not vecs:
+        return [0.0] * model.config.hidden_size
+
+    # 5) stack và mean‐pool across câu
+    stacked = torch.stack(vecs, dim=0)     # (n_sent, D)
+    doc_vec = stacked.mean(dim=0)         # (D,)
+    return doc_vec.cpu().tolist()
+
+def load_split(path: str) -> Dict[str, dict]:
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def convert_items(items: Dict[str, dict], split: str, models: dict, image_out: str = None
+                   ) -> Tuple[List[dict], Dict[str, dict], List[dict]]:
+    """Convert raw items into dataset entries with extracted features."""
+    samples: List[dict] = []
+    articles: Dict[str, dict] = {}
+    objects: List[dict] = []
+
+    vncore = models["vncore"]
+    mtcnn = models["mtcnn"]
+    facenet = models["facenet"]
+    resnet = models["resnet"]
+    yolo = models["yolo"]
+    tokenizer = models["tokenizer"]
+    roberta = models["roberta"]
+    preprocess = models["preprocess"]
+    device = models["device"]
+    for sid, item in tqdm(items.items(), desc=f"Processing {split}", unit="item"):
+        sample_id = str(sid)
+        img_path = item["image_path"]
+        print(img_path)
+        # Optionally copy image
+        if image_out:
+            os.makedirs(image_out, exist_ok=True)
+            dst = os.path.join(image_out, f"{sample_id}.jpg")
+            if not os.path.exists(dst):
+                try:
+                    shutil.copy(img_path, dst)
+                    print("sucess copy")
+                except OSError:
+                    pass
+            img_path = dst
+
+        caption = item.get("caption", "")
+        context_txt = " ".join(item.get("context", []))
+        try:
+            image = Image.open(img_path).convert("RGB")
+        except OSError:
+            continue
+
+        cap_ner = extract_entities(caption, vncore)
+        ctx_ner = extract_entities(context_txt, vncore)
+        face_info = detect_faces(image, mtcnn, facenet, device)
+        # obj_feats = detect_objects(img_path, yolo, resnet, device)
+        obj_feats = detect_objects(img_path, yolo, resnet, preprocess, device)
+        img_feat = image_feature(image, resnet, preprocess, device)
+        art_embed = roberta_embed(context_txt, tokenizer, roberta, vncore, device)
+
+        article = {
+            "_id": sample_id,
+            "context": context_txt,
+            "images": [caption],
+            "web_url": "",
+            "caption_ner": [cap_ner],
+            "context_ner": [ctx_ner],
+            "article_embed": art_embed,
+        }
+        articles[sample_id] = article
+
+        samples.append({
+            "_id": sample_id,
+            "article_id": sample_id,
+            "split": split,
+            "image_index": 0,
+            "facenet_details": face_info,
+            "image_feature": img_feat,
+        })
+
+        objects.append({"_id": sample_id, "object_features": obj_feats})
+        break
+
+    return samples, articles, objects
+
+
+def main() -> None:
+    
+    parser = argparse.ArgumentParser(description="Create ViWiki dataset files")
+    parser.add_argument("data_dir", nargs="?", default="/data/npl/ICEK/Wikipedia/content/ver4", help="Directory with train/val/test JSON")
+    parser.add_argument("output_dir", nargs="?", default="/data/npl/ICEK/TnT/dataset/content", help="Directory to write converted files")
+    parser.add_argument("--image-out", default="/data/npl/ICEK/TnT/dataset/images", dest="image_out",
+                        help="Optional directory to copy images")
+    parser.add_argument("--vncorenlp",default="/data/npl/ICEK/VnCoreNLP",
+                        help="Path to VnCoreNLP jar file")
+    args = parser.parse_args()
+    print("LOAD ARGS DONE!")
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    models = setup_models(device, args.vncorenlp)
+
+    print("MODEL SETUP DONE!")
+    all_samples: List[dict] = []
+    article_map: Dict[str, dict] = {}
+    object_entries: List[dict] = []
+
+    for split_name in ["val", "test", "train"]:
+        path = os.path.join(args.data_dir, f"{split_name}.json")
+        items = load_split(path)
+        samples, articles, objs = convert_items(items, split_name, models, args.image_out)
+        all_samples.extend(samples)
+        article_map.update(articles)
+        object_entries.extend(objs)
+
+    with open(os.path.join(args.output_dir, "splits.json"), "w", encoding="utf-8") as f:
+        json.dump(all_samples, f, ensure_ascii=False, separators=(',', ':'))
+
+    with open(os.path.join(args.output_dir, "articles.json"), "w", encoding="utf-8") as f:
+        json.dump(list(article_map.values()), f, ensure_ascii=False, separators=(',', ':'))
+
+    with open(os.path.join(args.output_dir, "objects.json"), "w", encoding="utf-8") as f:
+        json.dump(object_entries, f, ensure_ascii=False, separators=(',', ':'))
+
+
+if __name__ == "__main__":
+    main()
