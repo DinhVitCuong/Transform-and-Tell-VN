@@ -7,7 +7,6 @@ from PIL import Image
 import json
 import os
 from tqdm import tqdm
-import torch.multiprocessing as mp
 # Import necessary components from previous implementations
 from models.decoder import DynamicConvFacesObjectsDecoder
 from models.encoder import setup_models, extract_entities, detect_faces, detect_objects, image_feature, roberta_embed
@@ -407,7 +406,6 @@ def evaluate_model(model, config):
     return test_avg_loss, all_predictions
 
 if __name__ == "__main__":
-    mp.set_start_method("spawn", force=True)
     # Configuration (parameters from paper and config.yaml)
     config = {
         "data_dir": "/data/npl/ICEK/Wikipedia/content/ver4",
