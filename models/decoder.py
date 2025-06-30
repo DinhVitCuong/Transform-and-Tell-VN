@@ -31,7 +31,7 @@ class DynamicConvFacesObjectsDecoder(Decoder):
         self.dropout = dropout
         self.share_input_output_embed = share_decoder_input_output_embed
 
-        input_embed_dim = embedder.embedding_dim
+        input_embed_dim = embedder.get_output_dim()
         embed_dim = input_embed_dim
         output_embed_dim = input_embed_dim
 

@@ -164,7 +164,7 @@ def detect_faces(img: Image.Image, mtcnn: MTCNN, facenet: InceptionResnetV1, dev
 
 def detect_objects(image_path: str, model, resnet, preprocess, device):
     img = Image.open(image_path).convert("RGB")
-    results = model(image_path, conf=0.3, iou=0.45, max_det=64)       # returns list[Results]
+    results = model(image_path, conf=0.3, iou=0.45, max_det=64, verbose=False, show=False )     
     detections = []
     if not results:
         return detections
