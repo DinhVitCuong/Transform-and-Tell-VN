@@ -64,10 +64,10 @@ class NewsCaptionDataset(Dataset):
         self.tokenizer = models["tokenizer"]
         
     def __len__(self):
-        return len(self.data)
+        return len(self.keys)
     
     def __getitem__(self, idx):
-        item = self.data[str(idx)]
+        # Map the integer idx → the JSON key string
         key = self.keys[idx]
         item = self.data[key]
         img_path = item["image_path"]
