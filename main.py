@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import numpy as np
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from PIL import Image
@@ -10,7 +11,7 @@ from tqdm import tqdm
 # Import necessary components from previous implementations
 from models.decoder import DynamicConvFacesObjectsDecoder
 from models.encoder import setup_models, extract_entities, detect_faces, detect_objects, image_feature, roberta_embed
-
+from models.modules import AdaptiveEmbedding, AdaptiveSoftmax
 class EarlyStopper:
     def __init__(self, patience=5, min_delta=0):
         """
@@ -193,10 +194,20 @@ def train_model(config):
     )
     
     # Initialize model components
-    embedder = nn.Embedding(
+    # embedder = nn.Embedding(
+    #     num_embeddings=config["vocab_size"],
+    #     embedding_dim=config["embed_dim"]
+    # )
+    # Initialize adaptive embedder
+    embedder = AdaptiveEmbedding(
         num_embeddings=config["vocab_size"],
-        embedding_dim=config["embed_dim"]
+        embedding_dim=config["embed_dim"],
+        padding_idx=config["decoder_params"]["padding_idx"],
+        cutoff=config["decoder_params"]["adaptive_softmax_cutoff"],
+        factor=config["decoder_params"]["adaptive_softmax_factor"],
+        scale_grad=True
     )
+
     model = TransformAndTell(
         vocab_size=config["vocab_size"],
         embedder=embedder,
@@ -211,8 +222,18 @@ def train_model(config):
         eps=1e-6,
         weight_decay=1e-5
     )
-    criterion = nn.CrossEntropyLoss(ignore_index=train_dataset.tokenizer.pad_token_id)
-    
+    # criterion = nn.CrossEntropyLoss(ignore_index=train_dataset.tokenizer.pad_token_id)
+    # Initialize AdaptiveSoftmax criterion
+    criterion = AdaptiveSoftmax(
+        vocab_size=config["vocab_size"],
+        input_dim=config["decoder_params"]["decoder_output_dim"],
+        cutoff=config["decoder_params"]["adaptive_softmax_cutoff"],
+        factor=config["decoder_params"]["adaptive_softmax_factor"],
+        dropout=config["decoder_params"]["adaptive_softmax_dropout"],
+        adaptive_inputs=embedder if config["decoder_params"]["tie_adaptive_weights"] else None,
+        tie_proj=config["decoder_params"]["tie_adaptive_proj"]
+    ).to(device)
+
     # Early stopper
     early_stopper = EarlyStopper(
         patience=config.get("early_stopping_patience", 5),
@@ -224,7 +245,8 @@ def train_model(config):
     for epoch in range(config["epochs"]):
         model.train()
         train_loss = 0
-        
+        total_tokens = 0
+
         # Training phase
         for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}"):
             caption_ids = batch["caption_ids"].to(device)
@@ -232,17 +254,34 @@ def train_model(config):
             
             optimizer.zero_grad()
             logits, _ = model(caption_ids[:, :-1], contexts)
-            loss = criterion(
-                logits.view(-1, config["vocab_size"]),
+            # loss = criterion(
+            #     logits.view(-1, config["vocab_size"]),
+            #     caption_ids[:, 1:].contiguous().view(-1)
+            # )
+            loss, nll_loss = criterion(
+                logits.view(-1, logits.size(-1)),
                 caption_ids[:, 1:].contiguous().view(-1)
             )
-            loss.backward()
+            # Normalize loss by number of tokens
+            num_tokens = (caption_ids[:, 1:] != config["decoder_params"]["padding_idx"]).sum()
+            normalized_loss = loss / num_tokens
+            # loss.backward()
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
+            # optimizer.step()
+            
+            # train_loss += loss.item()
+            # Backward pass
+            optimizer.zero_grad()
+            normalized_loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
             optimizer.step()
             
-            train_loss += loss.item()
+            total_loss += loss.item()
+            total_tokens += num_tokens.item()
+        avg_loss = total_loss / total_tokens
+        print(f"Epoch {epoch+1}, Train Loss: {avg_loss:.4f}, Train Tokens: {total_tokens}")
         
-        avg_train_loss = train_loss / len(train_loader)
+        # avg_train_loss = train_loss / len(train_loader)
         
         # Validation phase
         model.eval()
@@ -253,17 +292,23 @@ def train_model(config):
                 contexts = {k: v.to(device) for k, v in batch["contexts"].items()}
                 
                 logits, _ = model(caption_ids[:, :-1], contexts)
-                loss = criterion(
-                    logits.view(-1, config["vocab_size"]),
+                # loss = criterion(
+                #     logits.view(-1, config["vocab_size"]),
+                #     caption_ids[:, 1:].contiguous().view(-1)
+                # )
+                # val_loss += loss.item()
+                
+                loss, nll_loss = criterion(
+                    logits.view(-1, logits.size(-1)),
                     caption_ids[:, 1:].contiguous().view(-1)
                 )
+                # Normalize loss by number of tokens
+                num_tokens = (caption_ids[:, 1:] != config["decoder_params"]["padding_idx"]).sum()
                 val_loss += loss.item()
+                val_total_tokens += num_tokens.item()
         
         avg_val_loss = val_loss / len(val_loader)
-        
-        print(f"Epoch {epoch+1}:")
-        print(f"  Train Loss: {avg_train_loss:.4f}")
-        print(f"  Val Loss: {avg_val_loss:.4f}")
+        print(f"Epoch {epoch+1}, Val Loss: {avg_val_loss:.4f}, Val Tokens: {val_total_tokens}")
         
         # Check for early stopping
         if early_stopper.early_stop(avg_val_loss):
@@ -285,20 +330,40 @@ def evaluate_model(model, config):
     models = setup_models(device, config["vncorenlp_path"])
     
     # Load validation dataset
-    val_dataset = NewsCaptionDataset(config["data_dir"], "val", models)
-    val_loader = DataLoader(
-        val_dataset,
+    test_dataset = NewsCaptionDataset(config["data_dir"], "test", models)
+    test_loader = DataLoader(
+        test_dataset,
         batch_size=config["batch_size"],
         shuffle=False,
         num_workers=config["num_workers"]
     )
-    
+    # Initialize adaptive embedder
+    embedder = AdaptiveEmbedding(
+        num_embeddings=config["vocab_size"],
+        embedding_dim=config["embed_dim"],
+        padding_idx=config["decoder_params"]["padding_idx"],
+        cutoff=config["decoder_params"]["adaptive_softmax_cutoff"],
+        factor=config["decoder_params"]["adaptive_softmax_factor"],
+        scale_grad=True
+    )
+    criterion = AdaptiveSoftmax(
+        vocab_size=config["vocab_size"],
+        input_dim=config["decoder_params"]["decoder_output_dim"],
+        cutoff=config["decoder_params"]["adaptive_softmax_cutoff"],
+        factor=config["decoder_params"]["adaptive_softmax_factor"],
+        dropout=config["decoder_params"]["adaptive_softmax_dropout"],
+        adaptive_inputs=embedder if config["decoder_params"]["tie_adaptive_weights"] else None,
+        tie_proj=config["decoder_params"]["tie_adaptive_proj"]
+    ).to(device)
+
     model.eval()
     total_loss = 0
     all_predictions = []
+
+    # criterion = nn.CrossEntropyLoss(ignore_index=test_dataset.tokenizer.pad_token_id)
     
     with torch.no_grad():
-        for batch in tqdm(val_loader, desc="Evaluating"):
+        for batch in tqdm(test_loader, desc="Evaluating"):
             caption_ids = batch["caption_ids"].to(device)
             contexts = {k: v.to(device) for k, v in batch["contexts"].items()}
             
@@ -306,25 +371,30 @@ def evaluate_model(model, config):
             logits, _ = model(caption_ids[:, :-1], contexts)
             
             # Calculate loss
-            loss = criterion(
-                logits.view(-1, config["vocab_size"]),
+            
+            loss, nll_loss = criterion(
+                logits.view(-1, logits.size(-1)),
                 caption_ids[:, 1:].contiguous().view(-1)
             )
-            total_loss += loss.item()
+            # Normalize loss by number of tokens
+            num_tokens = (caption_ids[:, 1:] != config["decoder_params"]["padding_idx"]).sum()
+            test_loss += loss.item()
+            test_total_tokens += num_tokens.item()
             
             # Generate captions
             for i in range(len(batch["image"])):
                 contexts_i = {k: v[i].unsqueeze(0) for k, v in contexts.items()}
                 generated_ids = model.generate(contexts_i)
-                generated_caption = val_dataset.tokenizer.decode(generated_ids)
+                generated_caption = test_dataset.tokenizer.decode(generated_ids)
                 all_predictions.append({
                     "image_path": batch["image_path"][i],
                     "true_caption": batch["caption"][i],
                     "predicted_caption": generated_caption
                 })
     
-    avg_loss = total_loss / len(val_loader)
-    print(f"Validation Loss: {avg_loss:.4f}")
+    test_avg_loss = total_loss / len(test_loader)    
+    print(f"Test Loss: {test_avg_loss:.4f}, Test Tokens: {test_total_tokens}")
+        
     
     # Save predictions
     with open(os.path.join(config["output_dir"], "predictions.json"), "w") as f:
@@ -383,4 +453,4 @@ if __name__ == "__main__":
               os.path.join(config["output_dir"], "transform_and_tell_model.pth"))
     
     # Run evaluation
-    val_loss, predictions = evaluate_model(trained_model, config)
+    test_loss, predictions = evaluate_model(trained_model, config)
