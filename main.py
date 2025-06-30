@@ -7,7 +7,7 @@ from PIL import Image
 import json
 import os
 from tqdm import tqdm
-
+import torch.multiprocessing as mp
 # Import necessary components from previous implementations
 from models.decoder import DynamicConvFacesObjectsDecoder
 from models.encoder import setup_models, extract_entities, detect_faces, detect_objects, image_feature, roberta_embed
@@ -407,6 +407,7 @@ def evaluate_model(model, config):
     return test_avg_loss, all_predictions
 
 if __name__ == "__main__":
+    mp.set_start_method("spawn", force=True)
     # Configuration (parameters from paper and config.yaml)
     config = {
         "data_dir": "/data/npl/ICEK/Wikipedia/content/ver4",
@@ -415,7 +416,7 @@ if __name__ == "__main__":
         "vocab_size": 64001,  # From phoBERT-base tokenizer
         "embed_dim": 1024,    # Hidden size
         "batch_size": 16,
-        "num_workers": 4,
+        "num_workers": 0,
         "epochs": 100,
         "lr": 1e-4,
         "embedder":{
