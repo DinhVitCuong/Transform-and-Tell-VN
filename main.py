@@ -11,7 +11,8 @@ from tqdm import tqdm
 # Import necessary components from previous implementations
 from models.decoder import DynamicConvFacesObjectsDecoder
 from models.encoder import setup_models, extract_entities, detect_faces, detect_objects, image_feature, roberta_embed
-from models.modules import AdaptiveEmbedding, AdaptiveSoftmax
+from tell.modules.token_embedders import AdaptiveEmbedding
+from tell.modules import AdaptiveSoftmax
 class EarlyStopper:
     def __init__(self, patience=5, min_delta=0):
         """
@@ -192,6 +193,7 @@ def train_model(config):
         shuffle=False,
         num_workers=config["num_workers"]
     )
+    print("DATALOADER LOADED!")
     
     # Initialize model components
     # embedder = nn.Embedding(
@@ -200,20 +202,21 @@ def train_model(config):
     # )
     # Initialize adaptive embedder
     embedder = AdaptiveEmbedding(
-        num_embeddings=config["vocab_size"],
-        embedding_dim=config["embed_dim"],
-        padding_idx=config["decoder_params"]["padding_idx"],
-        cutoff=config["decoder_params"]["adaptive_softmax_cutoff"],
-        factor=config["decoder_params"]["adaptive_softmax_factor"],
+        vocab_size=config["embedder"]["vocab_size"],
+        padding_idx=config["embedder"]["padding_idx"],
+        initial_dim=config["embedder"]["initial_dim"],
+        factor=config["embedder"]["factor"],
+        output_dim=config["embedder"]["output_dim"],
+        cutoff=config["embedder"]["cutoff"],
         scale_grad=True
     )
-
+    print("EMBEDDERR LOADED!")
     model = TransformAndTell(
         vocab_size=config["vocab_size"],
         embedder=embedder,
         decoder_params=config["decoder_params"]
     ).to(device)
-    
+    print("TransformAndTell LOADED!")
     # Optimizer and loss
     optimizer = torch.optim.Adam(
         model.parameters(),
@@ -233,13 +236,13 @@ def train_model(config):
         adaptive_inputs=embedder if config["decoder_params"]["tie_adaptive_weights"] else None,
         tie_proj=config["decoder_params"]["tie_adaptive_proj"]
     ).to(device)
-
+    print("CRITERION LOADED!")
     # Early stopper
     early_stopper = EarlyStopper(
         patience=config.get("early_stopping_patience", 5),
         min_delta=config.get("early_stopping_min_delta", 0.01)
     )
-    
+    print("START TRAINING!")
     # Training loop with validation
     best_val_loss = float('inf')
     for epoch in range(config["epochs"]):
@@ -339,11 +342,12 @@ def evaluate_model(model, config):
     )
     # Initialize adaptive embedder
     embedder = AdaptiveEmbedding(
-        num_embeddings=config["vocab_size"],
-        embedding_dim=config["embed_dim"],
-        padding_idx=config["decoder_params"]["padding_idx"],
-        cutoff=config["decoder_params"]["adaptive_softmax_cutoff"],
-        factor=config["decoder_params"]["adaptive_softmax_factor"],
+        vocab_size=config["embedder"]["vocab_size"],
+        padding_idx=config["embedder"]["padding_idx"],
+        initial_dim=config["embedder"]["initial_dim"],
+        factor=config["embedder"]["factor"],
+        output_dim=config["embedder"]["output_dim"],
+        cutoff=config["embedder"]["cutoff"],
         scale_grad=True
     )
     criterion = AdaptiveSoftmax(
@@ -400,7 +404,7 @@ def evaluate_model(model, config):
     with open(os.path.join(config["output_dir"], "predictions.json"), "w") as f:
         json.dump(all_predictions, f, indent=2)
     
-    return avg_loss, all_predictions
+    return test_avg_loss, all_predictions
 
 if __name__ == "__main__":
     # Configuration (parameters from paper and config.yaml)
@@ -414,6 +418,15 @@ if __name__ == "__main__":
         "num_workers": 4,
         "epochs": 100,
         "lr": 1e-4,
+        "embedder":{
+          "vocab_size": 64001,
+          "initial_dim": 1024,
+          "output_dim": 1024,
+          "factor": 1,
+          "cutoff": [5000, 20000],
+          "padding_idx": 0,
+          "scale_embeds": True
+        },
         "decoder_params": {
             "max_target_positions": 512,
             "dropout": 0.1,
