@@ -189,13 +189,15 @@ class LightweightConv1dTBC(nn.Module):
 
 class DynamicConv1dTBC(nn.Module):
     """Dynamic convolution in TBC format (time, batch, channels)"""
-    def __init__(self, input_size, kernel_size, padding, num_heads,
-                 weight_softmax=True, bias=True, dropout=0.):
+    def __init__(self, input_size, kernel_size, padding_l, num_heads,
+                 weight_softmax=True, weight_dropout=0.,bias=True, 
+                 dropout=0.):
         super().__init__()
         self.input_size = input_size
         self.kernel_size = kernel_size
-        self.padding = padding
+        self.padding_l = padding_l
         self.num_heads = num_heads
+        self.weight_dropout = weight_dropout
         self.weight_softmax = weight_softmax
         self.dropout = dropout
         

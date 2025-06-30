@@ -8,13 +8,11 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-# from tell.modules import (AdaptiveSoftmax, DynamicConv1dTBC, GehringLinear,
-#                           LightweightConv1dTBC, MultiHeadAttention)
-# from tell.modules.token_embedders import AdaptiveEmbedding
+from tell.modules import (AdaptiveSoftmax, DynamicConv1dTBC, GehringLinear,
+                          LightweightConv1dTBC, MultiHeadAttention)
+from tell.modules.token_embedders import AdaptiveEmbedding
 # from tell.utils import eval_str_list, fill_with_neg_inf, softmax
-from .modules import (AdaptiveSoftmax, DynamicConv1dTBC, GehringLinear, LightweightConv1dTBC,
-                      MultiHeadAttention, AdaptiveEmbedding, eval_str_list, fill_with_neg_inf, 
-                      softmax)
+from .modules import (eval_str_list, fill_with_neg_inf, softmax)
 from .decoder_base import Decoder, DecoderLayer
 
 class DynamicConvFacesObjectsDecoder(Decoder):
@@ -26,7 +24,7 @@ class DynamicConvFacesObjectsDecoder(Decoder):
                  decoder_normalize_before, attention_dropout, decoder_ffn_embed_dim,
                  decoder_kernel_size_list, adaptive_softmax_cutoff=None,
                  tie_adaptive_weights=False, adaptive_softmax_dropout=0,
-                 tie_adaptive_proj=False, adaptive_softmax_factor=0, decoder_layers=6,
+                 tie_adaptive_proj=False, adaptive_softmax_factor=1, decoder_layers=4,
                  final_norm=True, padding_idx=0, swap=False):
         super().__init__()
         self.vocab_size = vocab_size
@@ -49,10 +47,9 @@ class DynamicConvFacesObjectsDecoder(Decoder):
         self.layers.extend([
             DynamicConvDecoderLayer(embed_dim, decoder_conv_dim, decoder_glu,
                                     decoder_conv_type, weight_softmax, decoder_attention_heads,
-                                    weight_dropout, dropout, relu_dropout, input_dropout,
+                                    weight_dropout, relu_dropout, input_dropout,
                                     decoder_normalize_before, attention_dropout, decoder_ffn_embed_dim,
-                                    swap,
-                                    kernel_size=decoder_kernel_size_list[i])
+                                    swap, kernel_size=decoder_kernel_size_list[i])
             for i in range(decoder_layers)
         ])
 
@@ -171,13 +168,37 @@ class DynamicConvFacesObjectsDecoder(Decoder):
                 incremental_state[key] = incremental_state[key][:, active_idx]
 
 
-class DynamicConvDecoderLayer(DecoderLayer):
+# class DynamicConvDecoderLayer(DecoderLayer):
+#     def __init__(self, decoder_embed_dim, decoder_conv_dim, decoder_glu,
+#                  decoder_conv_type, weight_softmax, decoder_attention_heads,
+#                  weight_dropout, dropout, relu_dropout, input_dropout,
+#                  decoder_normalize_before, attention_dropout, decoder_ffn_embed_dim,
+#                  swap, kernel_size=0):
+
+class DynamicConvDecoderLayer(nn.TransformerDecoderLayer):
+    # def __init__(self,
+    #              decoder_embed_dim: int,
+    #              decoder_conv_dim: int,
+    #              decoder_glu: bool,
+    #              decoder_conv_type: str,
+    #              weight_softmax: float,
+    #              decoder_attention_heads: int,
+    #              weight_dropout: float,
+    #              dropout: float,
+    #              relu_dropout: float,
+    #              input_dropout: float,
+    #              decoder_normalize_before: bool,
+    #              attention_dropout: float,
+    #              decoder_ffn_embed_dim: int,
+    #              swap: bool,
+    #              kernel_size: int = 0,
+    # ):
     def __init__(self, decoder_embed_dim, decoder_conv_dim, decoder_glu,
                  decoder_conv_type, weight_softmax, decoder_attention_heads,
-                 weight_dropout, dropout, relu_dropout, input_dropout,
+                 weight_dropout, relu_dropout, input_dropout,
                  decoder_normalize_before, attention_dropout, decoder_ffn_embed_dim,
                  swap, kernel_size=0):
-        super().__init__()
+        super().__init__(d_model=1024,nhead=8)
         self.embed_dim = decoder_embed_dim
         self.conv_dim = decoder_conv_dim
         if decoder_glu:
@@ -200,7 +221,6 @@ class DynamicConvDecoderLayer(DecoderLayer):
             raise NotImplementedError
         self.linear2 = GehringLinear(self.conv_dim, self.embed_dim)
 
-        self.dropout = dropout
         self.relu_dropout = relu_dropout
         self.input_dropout = input_dropout
         self.normalize_before = decoder_normalize_before

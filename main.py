@@ -208,7 +208,7 @@ def train_model(config):
         factor=config["embedder"]["factor"],
         output_dim=config["embedder"]["output_dim"],
         cutoff=config["embedder"]["cutoff"],
-        scale_grad=True
+        scale_embeds=True
     )
     print("EMBEDDERR LOADED!")
     model = TransformAndTell(
@@ -348,7 +348,7 @@ def evaluate_model(model, config):
         factor=config["embedder"]["factor"],
         output_dim=config["embedder"]["output_dim"],
         cutoff=config["embedder"]["cutoff"],
-        scale_grad=True
+        scale_embeds=True
     )
     criterion = AdaptiveSoftmax(
         vocab_size=config["vocab_size"],
