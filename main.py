@@ -58,7 +58,8 @@ class NewsCaptionDataset(Dataset):
         # Load data
         with open(os.path.join(data_dir, f"{split}.json"), "r") as f:
             self.data = json.load(f)
-        
+        # define a stable ordering of keys
+        self.keys = sorted(self.data.keys(), key=lambda x: int(x))
         # Tokenizer for captions
         self.tokenizer = models["tokenizer"]
         
@@ -67,6 +68,8 @@ class NewsCaptionDataset(Dataset):
     
     def __getitem__(self, idx):
         item = self.data[str(idx)]
+        key = self.keys[idx]
+        item = self.data[key]
         img_path = item["image_path"]
         
         # Load and preprocess image
@@ -415,7 +418,7 @@ if __name__ == "__main__":
         "embed_dim": 1024,    # Hidden size
         "batch_size": 16,
         "num_workers": 0,
-        "epochs": 100,
+        "epochs": 400,
         "lr": 1e-4,
         "embedder":{
           "vocab_size": 64001,
