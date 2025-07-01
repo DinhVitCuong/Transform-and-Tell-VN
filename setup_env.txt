@@ -1,4 +1,4 @@
-1) Use a different env for preprocess ViWiki
+1) PYTHON 39
 
 torch 2.2.2+cu188 IS VERY IMPORTANT AND INSTALL FIRST
 torchvision and torchaudio as follow up
