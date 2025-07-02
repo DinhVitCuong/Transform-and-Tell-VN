@@ -416,7 +416,7 @@ if __name__ == "__main__":
         "vncorenlp_path": "/data/npl/ICEK/VnCoreNLP",
         "vocab_size": 64001,  # From phoBERT-base tokenizer
         "embed_dim": 1024,    # Hidden size
-        "batch_size": 16,
+        "batch_size": 8,
         "num_workers": 0,
         "epochs": 400,
         "lr": 1e-4,
