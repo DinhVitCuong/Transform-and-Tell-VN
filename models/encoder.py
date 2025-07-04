@@ -45,14 +45,13 @@ import cv2
 import numpy as np
 import torch
 from PIL import Image
-from torchvision.transforms import Compose, Normalize, ToTensor
 import torch.nn as nn
 
 import py_vncorenlp
 from transformers import AutoTokenizer, AutoModel
 from facenet_pytorch import MTCNN, InceptionResnetV1
 from torchvision.models import resnet152, ResNet152_Weights
-from torchvision.transforms import Compose, Normalize, ToTensor
+from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize
 from ultralytics import YOLO
 
 
@@ -60,14 +59,15 @@ def setup_models(device: torch.device, vncorenlp_path="/data/npl/ICEK/VnCoreNLP"
     py_vncorenlp.download_model(save_dir=vncorenlp_path)
     vncore = py_vncorenlp.VnCoreNLP(annotators=["wseg", "pos", "ner", "parse"], save_dir=vncorenlp_path)
     print("LOADED VNCORENLP!")
-
+    
     # Face detection + embedding
     mtcnn = MTCNN(keep_all=True, device=device)
     facenet = InceptionResnetV1(pretrained="vggface2").eval().to(device)
     print("LOADED FaceNet!")
 
     # Global image feature
-    base = resnet152(pretrained=True).eval().to(device)
+    weights = ResNet152_Weights.IMAGENET1K_V1 
+    base = resnet152(weights=weights).eval().to(device)
     # children() trả về: conv1, bn1, relu, maxpool, layer1…layer4, avgpool, fc
     # [-2] loại avgpool, [-1] loại fc
     resnet = nn.Sequential(*list(base.children())[:-2]).eval().to(device)
@@ -191,7 +191,16 @@ def detect_objects(image_path: str, model, resnet, preprocess, device):
     return detections
 
 def image_feature(img: Image.Image, resnet: torch.nn.Module, preprocess: Compose, device: torch.device) -> List[float]:
-    tensor = preprocess(img).unsqueeze(0).to(device)
+    preprocess_img_feat = Compose([
+    # 1) Resize the shorter side to 256 (preserve aspect)
+    Resize(256),
+    # 2) Crop out the central 224×224 patch
+    CenterCrop(224),
+    ToTensor(),
+    Normalize(mean=[0.485, 0.456, 0.406],
+              std =[0.229, 0.224, 0.225])
+    ])
+    tensor = preprocess_img_feat(img).unsqueeze(0).to(device)
     with torch.no_grad():
         fmap = resnet(tensor)                         # (1,2048,7,7)
     fmap = fmap.squeeze(0)                            # (2048,7,7)
