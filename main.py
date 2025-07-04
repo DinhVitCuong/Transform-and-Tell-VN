@@ -84,15 +84,19 @@ class NewsCaptionDataset(Dataset):
                                     self.models["preprocess"], 
                                     self.models["device"])
             contexts["image"] = torch.tensor(img_feat).to(self.models["device"])
-            contexts["image_mask"] = None
+            contexts["image_mask"] = torch.zeros(
+                img_feat.size(0), dtype=torch.bool, device=self.models["device"]
+            )
             
             # Face features (up to 4 faces)
             face_info = detect_faces(img, self.models["mtcnn"], 
                                     self.models["facenet"], 
                                     self.models["device"])
-            contexts["faces"] = torch.tensor(face_info["embeddings"]).to(self.models["device"]) \
+            N = face_info.shape[0]
+            face_embeds = torch.tensor(face_info["embeddings"]).to(self.models["device"]) \
                                 if face_info["n_faces"] > 0 else torch.zeros((0, 512))
-            contexts["faces_mask"] = None
+            contexts["faces_mask"] = torch.isnan(face_embeds).any(dim=-1)
+            contexts["faces"] = face_embeds[contexts["faces_mask"]] = 0
             
             # Object features (up to 64 objects)
             obj_feats = detect_objects(img_path, self.models["yolo"],
@@ -109,8 +113,9 @@ class NewsCaptionDataset(Dataset):
                                       self.models["roberta"],
                                       self.models["vncore"],
                                       self.models["device"])
-            contexts["article"] = torch.tensor(art_embed).unsqueeze(0)  # Add sequence dim
-            contexts["article_mask"] = None
+            article_ids = art_embed.input_ids.squeeze(0).to(self.models["device"])
+            contexts["article"] = article_ids.unsqueeze(-1)  # Add sequence dim
+            contexts["article_mask"] = article_ids == self.tokenizer.pad_token_id
         
         # Process caption
         caption = item.get("caption", "")
@@ -147,6 +152,18 @@ class TransformAndTell(nn.Module):
     
     def generate(self, contexts, max_length=100, temperature=1.0):
         """Generate caption from contexts"""
+        # The quirks of dynamic convolution implementation: The context
+        # embedding has dimension [seq_len, batch_size], but the mask has
+        # dimension [batch_size, seq_len].
+        print(f"CONTEXTS IMAGE_FEAT SHAPE: {contexts["image"].shape()}")
+        print(f"CONTEXTS ARTICLE SHAPE: {contexts["article"].shape()}")
+        print(f"CONTEXTS OBJECT SHAPE: {contexts["obj"].shape()}")
+        print(f"CONTEXTS FACES SHAPE: {contexts["faces"].shape()}")
+        contexts["image"]=contexts["image"].transpose(0, 1)
+        contexts["article"]=contexts["article"].transpose(0, 1)
+        contexts["obj"]=contexts["obj"].transpose(0, 1)
+        contexts["faces"]=contexts["faces"].transpose(0, 1)
+        
         self.eval()
         generated = []
         incremental_state = {}

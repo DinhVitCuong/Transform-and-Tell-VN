@@ -163,6 +163,7 @@ def detect_faces(img: Image.Image, mtcnn: MTCNN, facenet: InceptionResnetV1, dev
     }
 
 def detect_objects(image_path: str, model, resnet, preprocess, device):
+    projection = nn.Linear(2048, 1024).to(device).eval()
     img = Image.open(image_path).convert("RGB")
     results = model(image_path, conf=0.3, iou=0.45, max_det=64, verbose=False, show=False )     
     detections = []
@@ -181,13 +182,10 @@ def detect_objects(image_path: str, model, resnet, preprocess, device):
         tensor = preprocess(crop).unsqueeze(0).to(device)
         with torch.no_grad():
             feat_tensor = resnet(tensor).squeeze()   # still a Tensor
+            feat_1024   = projection(feat_tensor)
         # convert to plain Python list:
-        feat = feat_tensor.cpu().tolist()
-        detections.append({
-            "label": model.names[cls],
-            "confidence": conf,
-            "feature": feat
-        })
+        feat = feat_1024.cpu().tolist()
+        detections.append([i, feat])
     return detections
 
 def image_feature(img: Image.Image, resnet: torch.nn.Module, preprocess: Compose, device: torch.device) -> List[float]:
@@ -301,95 +299,6 @@ def roberta_embed(
     stacked = torch.stack(vecs, dim=0)     # (n_sent, D)
     doc_vec = stacked.mean(dim=0)         # (D,)
     return doc_vec.tolist()
-
-
-# def roberta_embed(
-#     text: str,
-#     tokenizer,
-#     model,
-#     segmenter,
-#     device: torch.device
-# ) -> List[float]:
-#     """
-#     - text: cả đoạn context (có thể rất dài)
-#     - tokenizer/model: vinai/phobert-base đã load sẵn
-#     - segmenter: VnCoreNLP(tokenize) đã khởi tạo
-#     - device: cpu hoặc cuda
-#     Trả về: embedding 1-D (hidden_size) cho toàn bộ đoạn text
-#     """
-#     sentences = re.split(r'(?<=[\.!?])\s+', text.strip())
-#     vecs = []
-#     for sent in sentences:
-#         sent = sent.strip()
-#         if not sent:
-#             continue
-#         if sent.count('·') >= 5: 
-#             continue
-
-#         seg_sents = segmenter.word_segment(sent)
-#         seg_text  = " ".join(seg_sents)
-
-#         batch = tokenizer(
-#             seg_text,
-#             return_tensors="pt",
-#             truncation=True,
-#             max_length=model.config.max_position_embeddings
-#         )
-
-#         # Split if input exceeds the max_position_embeddings
-#         if len(batch['input_ids'][0]) > model.config.max_position_embeddings:
-#             chunk_size = model.config.max_position_embeddings
-#             chunks = [batch['input_ids'][0][i:i + chunk_size] for i in range(0, len(batch['input_ids'][0]), chunk_size)]
-            
-#             # Create new batches for each chunk and pass through the model
-#             for chunk in chunks:
-#                 chunk_batch = {k: v.to(device) for k, v in batch.items()}
-#                 chunk_batch['input_ids'] = chunk.unsqueeze(0).to(device)  # Adjust the batch size if needed
-
-#                 try:
-#                     with torch.no_grad():
-#                         out = model(**chunk_batch).last_hidden_state
-#                 except RuntimeError as e:
-#                     print(f"[WARN] RoBERTa GPU failed on sent: {repr(sent)} → {e}")
-#                     try:
-#                         cpu_batch = {k: v.cpu() for k, v in chunk_batch.items()}
-#                         model_cpu = model.to("cpu")
-#                         with torch.no_grad():
-#                             out = model_cpu(**cpu_batch).last_hidden_state
-#                         model.to(device)
-#                     except Exception as e2:
-#                         print(f"[WARN] RoBERTa CPU also failed, skip sent → {e2}")
-#                         continue
-
-#                 sent_vec = out.mean(dim=1).squeeze(0)  # (D,)
-#                 vecs.append(sent_vec)
-#         else:
-#             batch = {k: v.to(device) for k, v in batch.items()}
-#             try:
-#                 with torch.no_grad():
-#                     out = model(**batch).last_hidden_state
-#             except RuntimeError as e:
-#                 print(f"[WARN] RoBERTa GPU failed on sent: {repr(sent)} → {e}")
-#                 try:
-#                     cpu_batch = {k: v.cpu() for k, v in batch.items()}
-#                     model_cpu = model.to("cpu")
-#                     with torch.no_grad():
-#                         out = model_cpu(**cpu_batch).last_hidden_state
-#                     model.to(device)
-#                 except Exception as e2:
-#                     print(f"[WARN] RoBERTa CPU also failed, skip sent → {e2}")
-#                     continue
-
-#             sent_vec = out.mean(dim=1).squeeze(0)  # (D,)
-#             vecs.append(sent_vec)
-
-#     if not vecs:
-#         return [0.0] * model.config.hidden_size
-
-#     stacked = torch.stack(vecs, dim=0)     # (n_sent, D)
-#     doc_vec = stacked.mean(dim=0)         # (D,)
-#     return doc_vec.tolist()
-
 
 def load_split(path: str) -> Dict[str, dict]:
     with open(path, "r", encoding="utf-8") as f:

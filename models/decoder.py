@@ -168,31 +168,7 @@ class DynamicConvFacesObjectsDecoder(Decoder):
                 incremental_state[key] = incremental_state[key][:, active_idx]
 
 
-# class DynamicConvDecoderLayer(DecoderLayer):
-#     def __init__(self, decoder_embed_dim, decoder_conv_dim, decoder_glu,
-#                  decoder_conv_type, weight_softmax, decoder_attention_heads,
-#                  weight_dropout, dropout, relu_dropout, input_dropout,
-#                  decoder_normalize_before, attention_dropout, decoder_ffn_embed_dim,
-#                  swap, kernel_size=0):
-
 class DynamicConvDecoderLayer(nn.TransformerDecoderLayer):
-    # def __init__(self,
-    #              decoder_embed_dim: int,
-    #              decoder_conv_dim: int,
-    #              decoder_glu: bool,
-    #              decoder_conv_type: str,
-    #              weight_softmax: float,
-    #              decoder_attention_heads: int,
-    #              weight_dropout: float,
-    #              dropout: float,
-    #              relu_dropout: float,
-    #              input_dropout: float,
-    #              decoder_normalize_before: bool,
-    #              attention_dropout: float,
-    #              decoder_ffn_embed_dim: int,
-    #              swap: bool,
-    #              kernel_size: int = 0,
-    # ):
     def __init__(self, decoder_embed_dim, decoder_conv_dim, decoder_glu,
                  decoder_conv_type, weight_softmax, decoder_attention_heads,
                  weight_dropout, relu_dropout, input_dropout,
@@ -263,6 +239,7 @@ class DynamicConvDecoderLayer(nn.TransformerDecoderLayer):
         self.swap = swap
 
     def forward(self, X, contexts, incremental_state):
+
         residual = X
         X = self.maybe_layer_norm(self.conv_layer_norm, X, before=True)
         X = F.dropout(X, p=self.input_dropout, training=self.training)
