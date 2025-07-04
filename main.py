@@ -155,10 +155,10 @@ class TransformAndTell(nn.Module):
         # The quirks of dynamic convolution implementation: The context
         # embedding has dimension [seq_len, batch_size], but the mask has
         # dimension [batch_size, seq_len].
-        print(f"CONTEXTS IMAGE_FEAT SHAPE: {contexts["image"].shape()}")
-        print(f"CONTEXTS ARTICLE SHAPE: {contexts["article"].shape()}")
-        print(f"CONTEXTS OBJECT SHAPE: {contexts["obj"].shape()}")
-        print(f"CONTEXTS FACES SHAPE: {contexts["faces"].shape()}")
+        print(f"""CONTEXTS IMAGE_FEAT SHAPE: {contexts["image"].shape()}""")
+        print(f"""CONTEXTS ARTICLE SHAPE: {contexts["article"].shape()}""")
+        print(f"""CONTEXTS OBJECT SHAPE: {contexts["obj"].shape()}""")
+        print(f"""CONTEXTS FACES SHAPE: {contexts["faces"].shape()}""")
         contexts["image"]=contexts["image"].transpose(0, 1)
         contexts["article"]=contexts["article"].transpose(0, 1)
         contexts["obj"]=contexts["obj"].transpose(0, 1)
