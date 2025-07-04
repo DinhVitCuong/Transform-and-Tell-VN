@@ -254,7 +254,7 @@ def roberta_embed(
                     with torch.no_grad():
                         out = model(**chunk_batch).last_hidden_state
                 except RuntimeError as e:
-                    print(f"[WARN] RoBERTa GPU failed on sent: {repr(sent)} → {e}")
+                    print(f"[WARN] phoBERT GPU failed on sent: {repr(sent)} → {e}")
                     try:
                         cpu_batch = {k: v.cpu() for k, v in chunk_batch.items()}
                         model_cpu = model.to("cpu")
@@ -262,7 +262,7 @@ def roberta_embed(
                             out = model_cpu(**cpu_batch).last_hidden_state
                         model.to(device)
                     except Exception as e2:
-                        print(f"[WARN] RoBERTa CPU also failed, skip sent → {e2}")
+                        print(f"[WARN] phoBERT CPU also failed, skip sent → {e2}")
                         continue
 
                 sent_vec = out.mean(dim=1).squeeze(0)  # (D,)
@@ -272,7 +272,7 @@ def roberta_embed(
                 with torch.no_grad():
                     out = model(**batch).last_hidden_state
             except RuntimeError as e:
-                print(f"[WARN] RoBERTa GPU failed on sent: {repr(sent)} → {e}")
+                print(f"[WARN] phoBERT GPU failed on sent: {repr(sent)} → {e}")
                 try:
                     cpu_batch = {k: v.cpu() for k, v in batch.items()}
                     model_cpu = model.to("cpu")
@@ -280,7 +280,7 @@ def roberta_embed(
                         out = model_cpu(**cpu_batch).last_hidden_state
                     model.to(device)
                 except Exception as e2:
-                    print(f"[WARN] RoBERTa CPU also failed, skip sent → {e2}")
+                    print(f"[WARN] phoBERT CPU also failed, skip sent → {e2}")
                     continue
 
             sent_vec = out.mean(dim=1).squeeze(0)  # (D,)
