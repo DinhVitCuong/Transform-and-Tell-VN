@@ -83,16 +83,16 @@ class NewsCaptionDataset(Dataset):
             img_feat = image_feature(img, self.models["resnet"], 
                                     self.models["preprocess"], 
                                     self.models["device"])
-            contexts["image"] = torch.tensor(img_feat).to(self.models["device"])
+            img_tensor = torch.tensor(img_feat).to(self.models["device"])
+            contexts["image"] = img_tensor
             contexts["image_mask"] = torch.zeros(
-                img_feat.size(0), dtype=torch.bool, device=self.models["device"]
+                img_tensor.size(0), dtype=torch.bool, device=self.models["device"]
             )
             
             # Face features (up to 4 faces)
             face_info = detect_faces(img, self.models["mtcnn"], 
                                     self.models["facenet"], 
                                     self.models["device"])
-            N = face_info.shape[0]
             face_embeds = torch.tensor(face_info["embeddings"]).to(self.models["device"]) \
                                 if face_info["n_faces"] > 0 else torch.zeros((0, 512))
             contexts["faces_mask"] = torch.isnan(face_embeds).any(dim=-1)
@@ -103,19 +103,27 @@ class NewsCaptionDataset(Dataset):
                                       self.models["resnet_object"],
                                       self.models["preprocess"],
                                       self.models["device"])
-            contexts["obj"] = torch.tensor([obj["feature"] for obj in obj_feats]).to(self.models["device"])
-            contexts["obj_mask"] = None
+            if len(obj_feats) > 0:
+                obj_tensor = torch.tensor(obj_feats).to(self.models["device"])
+                obj_mask = torch.isnan(obj_tensor).any(dim=-1)
+                obj_tensor[obj_mask] = 0
+                contexts["obj"] = obj_tensor
+                contexts["obj_masks"] = obj_mask
+            else:
+                # No detections, fallback
+                contexts["obj"] = torch.zeros((1, 1024), device=self.models["device"])
+                contexts["obj_masks"] = torch.tensor([True], device=self.models["device"])
             
             # Article features
             context_txt = " ".join(item.get("context", []))
-            art_embed = roberta_embed(context_txt, 
-                                      self.models["tokenizer"],
-                                      self.models["roberta"],
-                                      self.models["vncore"],
-                                      self.models["device"])
-            article_ids = art_embed.input_ids.squeeze(0).to(self.models["device"])
-            contexts["article"] = article_ids.unsqueeze(-1)  # Add sequence dim
-            contexts["article_mask"] = article_ids == self.tokenizer.pad_token_id
+            art_embed = self.models["embedder"](context_txt)
+            # art_embed = roberta_embed(context_txt, 
+            #                           self.models["tokenizer"],
+            #                           self.models["roberta"],
+            #                           self.models["vncore"],
+            #                           self.models["device"])
+            contexts["article"] = torch.tensor(art_embed).to(self.models["device"]).unsqueeze(0)  # shape [1, D]
+            contexts["article_mask"] = torch.zeros((1,), dtype=torch.bool, device=self.models["device"])
         
         # Process caption
         caption = item.get("caption", "")

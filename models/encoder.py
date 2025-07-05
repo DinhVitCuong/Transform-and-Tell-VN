@@ -46,14 +46,76 @@ import numpy as np
 import torch
 from PIL import Image
 import torch.nn as nn
-
+import torch.nn.functional as F
 import py_vncorenlp
 from transformers import AutoTokenizer, AutoModel
 from facenet_pytorch import MTCNN, InceptionResnetV1
 from torchvision.models import resnet152, ResNet152_Weights
 from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize
 from ultralytics import YOLO
+import re
 
+
+class RobertaEmbedder(torch.nn.Module):
+    def __init__(self, model, tokenizer, segmenter, device):
+        super().__init__()
+        self.model = model
+        self.tokenizer = tokenizer
+        self.segmenter = segmenter
+        self.device = device
+        self.num_layers = model.config.num_hidden_layers + 1  # +1 for embedding layer
+        self.hidden_size = model.config.hidden_size
+        # Learnable weights α_ℓ for each layer
+        self.layer_weights = torch.nn.Parameter(torch.ones(self.num_layers) / self.num_layers)
+
+    def forward(self, text: str) -> torch.Tensor:
+        # Clean input
+        try:
+            text = text.encode('utf-8', 'ignore').decode('utf-8')
+        except Exception as e:
+            print(f"[WARN] Encoding issue: {e}")
+            return torch.zeros(1, self.hidden_size).to(self.device)
+
+        text = re.sub(r'[^\x00-\x7F]+', '', text)
+        sentences = re.split(r'(?<=[\.!?])\s+', text.strip())
+
+        token_embeds = []
+        for sent in sentences:
+            if not sent.strip() or sent.count('·') >= 5:
+                continue
+
+            seg_text = " ".join(self.segmenter.word_segment(sent.strip()))
+
+            batch = self.tokenizer(
+                seg_text,
+                return_tensors="pt",
+                truncation=True,
+                max_length=self.model.config.max_position_embeddings
+            ).to(self.device)
+
+            try:
+                with torch.no_grad():
+                    out = self.model(**batch, output_hidden_states=True)
+            except RuntimeError as e:
+                print(f"[WARN] RoBERTa GPU failed on sent: {sent} → {e}")
+                try:
+                    model_cpu = self.model.to("cpu")
+                    with torch.no_grad():
+                        out = model_cpu(**batch.cpu(), output_hidden_states=True)
+                    self.model.to(self.device)
+                except Exception as e2:
+                    print(f"[WARN] RoBERTa CPU also failed → {e2}")
+                    continue
+
+            hidden_states = torch.stack(out.hidden_states, dim=0)  # shape: (25, 1, seq_len, hidden_size)
+            weighted = (F.softmax(self.layer_weights, dim=0).view(-1, 1, 1, 1) * hidden_states).sum(dim=0)
+            # weighted: (1, seq_len, hidden_size)
+            token_embeds.append(weighted.squeeze(0))  # shape: (seq_len, hidden_size)
+
+        if not token_embeds:
+            return torch.zeros(1, self.hidden_size).to(self.device)
+
+        return torch.cat(token_embeds, dim=0)  # shape: (total_seq_len, hidden_size)
 
 def setup_models(device: torch.device, vncorenlp_path="/data/npl/ICEK/VnCoreNLP"):
     py_vncorenlp.download_model(save_dir=vncorenlp_path)
@@ -78,10 +140,11 @@ def setup_models(device: torch.device, vncorenlp_path="/data/npl/ICEK/VnCoreNLP"
     yolo = YOLO("yolov8m.pt")  # tải weight tự động lần đầu
     yolo.fuse()                # fuse model for speed
     print("LOADED YOLOv5!")
+    
     phoBERTlocal = "/data/npl/ICEK/TnT/phoBERT/phobert-base"
-
     tokenizer = AutoTokenizer.from_pretrained(phoBERTlocal, local_files_only=True)
     roberta     = AutoModel    .from_pretrained(phoBERTlocal, use_safetensors=True, local_files_only=True).to(device).eval()
+    embedder = RobertaEmbedder(roberta, tokenizer, vncore, device).to(device)
     print("LOADED phoBERT!")
     preprocess = Compose([
         ToTensor(),
@@ -97,6 +160,7 @@ def setup_models(device: torch.device, vncorenlp_path="/data/npl/ICEK/VnCoreNLP"
         "resnet_object": resnet_object,
         "roberta": roberta,
         "tokenizer": tokenizer,
+        "embedder": embedder,
         "yolo": yolo,
         "preprocess": preprocess,
         "device": device,
@@ -185,7 +249,7 @@ def detect_objects(image_path: str, model, resnet, preprocess, device):
             feat_1024   = projection(feat_tensor)
         # convert to plain Python list:
         feat = feat_1024.cpu().tolist()
-        detections.append([i, feat])
+        detections.append(feat)
     return detections
 
 def image_feature(img: Image.Image, resnet: torch.nn.Module, preprocess: Compose, device: torch.device) -> List[float]:
@@ -206,99 +270,96 @@ def image_feature(img: Image.Image, resnet: torch.nn.Module, preprocess: Compose
     patches = fmap.permute(1, 2, 0).reshape(-1, 2048)  # (49,2048)
     return patches.cpu().tolist() 
 
-import re
+# def roberta_embed(
+#     text: str,
+#     tokenizer,
+#     model,
+#     segmenter,
+#     device: torch.device
+# ) -> List[float]:
+#     # Filter out non-UTF-8 characters and strange symbols
+#     try:
+#         # Attempt to decode the text, ignore errors
+#         text = text.encode('utf-8', 'ignore').decode('utf-8')
+#     except Exception as e:
+#         print(f"[WARN] Skipping text due to encoding issue: {e}")
+#         return [0.0] * model.config.hidden_size  # Return a default vector or skip as needed
 
-def roberta_embed(
-    text: str,
-    tokenizer,
-    model,
-    segmenter,
-    device: torch.device
-) -> List[float]:
-    # Filter out non-UTF-8 characters and strange symbols
-    try:
-        # Attempt to decode the text, ignore errors
-        text = text.encode('utf-8', 'ignore').decode('utf-8')
-    except Exception as e:
-        print(f"[WARN] Skipping text due to encoding issue: {e}")
-        return [0.0] * model.config.hidden_size  # Return a default vector or skip as needed
+#     # Optional: further filter using regex to remove unusual characters
+#     text = re.sub(r'[^\x00-\x7F]+', '', text)  # Removes non-ASCII characters
 
-    # Optional: further filter using regex to remove unusual characters
-    text = re.sub(r'[^\x00-\x7F]+', '', text)  # Removes non-ASCII characters
+#     sentences = re.split(r'(?<=[\.!?])\s+', text.strip())
+#     vecs = []
+#     for sent in sentences:
+#         sent = sent.strip()
+#         if not sent:
+#             continue
+#         if sent.count('·') >= 5: 
+#             continue
 
-    sentences = re.split(r'(?<=[\.!?])\s+', text.strip())
-    vecs = []
-    for sent in sentences:
-        sent = sent.strip()
-        if not sent:
-            continue
-        if sent.count('·') >= 5: 
-            continue
+#         seg_sents = segmenter.word_segment(sent)
+#         seg_text  = " ".join(seg_sents)
 
-        seg_sents = segmenter.word_segment(sent)
-        seg_text  = " ".join(seg_sents)
+#         batch = tokenizer(
+#             seg_text,
+#             return_tensors="pt",
+#             truncation=True,
+#             max_length=model.config.max_position_embeddings
+#         )
 
-        batch = tokenizer(
-            seg_text,
-            return_tensors="pt",
-            truncation=True,
-            max_length=model.config.max_position_embeddings
-        )
+#         batch = {k: v.to(device) for k, v in batch.items()}
 
-        batch = {k: v.to(device) for k, v in batch.items()}
+#         # Split if input exceeds the max_position_embeddings
+#         if len(batch['input_ids'][0]) > model.config.max_position_embeddings:
+#             chunk_size = model.config.max_position_embeddings
+#             chunks = [batch['input_ids'][0][i:i + chunk_size] for i in range(0, len(batch['input_ids'][0]), chunk_size)]
 
-        # Split if input exceeds the max_position_embeddings
-        if len(batch['input_ids'][0]) > model.config.max_position_embeddings:
-            chunk_size = model.config.max_position_embeddings
-            chunks = [batch['input_ids'][0][i:i + chunk_size] for i in range(0, len(batch['input_ids'][0]), chunk_size)]
+#             # Create new batches for each chunk and pass through the model
+#             for chunk in chunks:
+#                 chunk_batch = {k: v.to(device) for k, v in batch.items()}
+#                 chunk_batch['input_ids'] = chunk.unsqueeze(0).to(device)
 
-            # Create new batches for each chunk and pass through the model
-            for chunk in chunks:
-                chunk_batch = {k: v.to(device) for k, v in batch.items()}
-                chunk_batch['input_ids'] = chunk.unsqueeze(0).to(device)
+#                 try:
+#                     with torch.no_grad():
+#                         out = model(**chunk_batch).last_hidden_state
+#                 except RuntimeError as e:
+#                     print(f"[WARN] phoBERT GPU failed on sent: {repr(sent)} → {e}")
+#                     try:
+#                         cpu_batch = {k: v.cpu() for k, v in chunk_batch.items()}
+#                         model_cpu = model.to("cpu")
+#                         with torch.no_grad():
+#                             out = model_cpu(**cpu_batch).last_hidden_state
+#                         model.to(device)
+#                     except Exception as e2:
+#                         print(f"[WARN] phoBERT CPU also failed, skip sent → {e2}")
+#                         continue
 
-                try:
-                    with torch.no_grad():
-                        out = model(**chunk_batch).last_hidden_state
-                except RuntimeError as e:
-                    print(f"[WARN] phoBERT GPU failed on sent: {repr(sent)} → {e}")
-                    try:
-                        cpu_batch = {k: v.cpu() for k, v in chunk_batch.items()}
-                        model_cpu = model.to("cpu")
-                        with torch.no_grad():
-                            out = model_cpu(**cpu_batch).last_hidden_state
-                        model.to(device)
-                    except Exception as e2:
-                        print(f"[WARN] phoBERT CPU also failed, skip sent → {e2}")
-                        continue
+#                 sent_vec = out.mean(dim=1).squeeze(0)  # (D,)
+#                 vecs.append(sent_vec)
+#         else:
+#             try:
+#                 with torch.no_grad():
+#                     out = model(**batch).last_hidden_state
+#             except RuntimeError as e:
+#                 print(f"[WARN] phoBERT GPU failed on sent: {repr(sent)} → {e}")
+#                 try:
+#                     cpu_batch = {k: v.cpu() for k, v in batch.items()}
+#                     model_cpu = model.to("cpu")
+#                     with torch.no_grad():
+#                         out = model_cpu(**cpu_batch).last_hidden_state
+#                     model.to(device)
+#                 except Exception as e2:
+#                     print(f"[WARN] phoBERT CPU also failed, skip sent → {e2}")
+#                     continue
 
-                sent_vec = out.mean(dim=1).squeeze(0)  # (D,)
-                vecs.append(sent_vec)
-        else:
-            try:
-                with torch.no_grad():
-                    out = model(**batch).last_hidden_state
-            except RuntimeError as e:
-                print(f"[WARN] phoBERT GPU failed on sent: {repr(sent)} → {e}")
-                try:
-                    cpu_batch = {k: v.cpu() for k, v in batch.items()}
-                    model_cpu = model.to("cpu")
-                    with torch.no_grad():
-                        out = model_cpu(**cpu_batch).last_hidden_state
-                    model.to(device)
-                except Exception as e2:
-                    print(f"[WARN] phoBERT CPU also failed, skip sent → {e2}")
-                    continue
+#             sent_vec = out.mean(dim=1).squeeze(0)  # (D,)
+#             vecs.append(sent_vec)
 
-            sent_vec = out.mean(dim=1).squeeze(0)  # (D,)
-            vecs.append(sent_vec)
+#     if not vecs:
+#         return [0.0] * model.config.hidden_size
 
-    if not vecs:
-        return [0.0] * model.config.hidden_size
-
-    stacked = torch.stack(vecs, dim=0)     # (n_sent, D)
-    doc_vec = stacked.mean(dim=0)         # (D,)
-    return doc_vec.tolist()
+#     stacked = torch.stack(vecs, dim=0)     # (n_sent, D)
+#     doc_vec = stacked.mean(dim=0)         # (D,)
 
 def load_split(path: str) -> Dict[str, dict]:
     with open(path, "r", encoding="utf-8") as f:
