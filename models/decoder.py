@@ -28,7 +28,7 @@ class DynamicConvFacesObjectsDecoder(Decoder):
                  final_norm=True, padding_idx=0, swap=False):
         super().__init__()
         self.vocab_size = vocab_size
-        self.dropout = dropout
+        self.dropout = nn.Dropout(0.1)
         self.share_input_output_embed = share_decoder_input_output_embed
 
         input_embed_dim = embedder.get_output_dim()
@@ -87,8 +87,14 @@ class DynamicConvFacesObjectsDecoder(Decoder):
 
     def forward(self, prev_target, contexts, incremental_state=None,
                 use_layers=None, **kwargs):
+        for key in ['image','article','faces','obj']:
+            feat = contexts[key]
+            mask = contexts[f"{key}_mask"]
+            print(f"{key:>8} feat: {tuple(feat.shape)}, mask: {tuple(mask.shape)}")
+
         # Embed tokens
-        X = self.embedder(prev_target, incremental_state=incremental_state)
+        X = self.embedder(prev_target)
+        # X = self.embedder(prev_target, incremental_state=incremental_state)
 
         if self.project_in_dim is not None:
             X = self.project_in_dim(X)

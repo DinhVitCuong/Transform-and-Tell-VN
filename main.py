@@ -9,7 +9,7 @@ import os
 from tqdm import tqdm
 # Import necessary components from previous implementations
 from models.decoder import DynamicConvFacesObjectsDecoder
-from models.encoder import setup_models, extract_entities, detect_faces, detect_objects, image_feature, roberta_embed
+from models.encoder import setup_models, extract_entities, detect_faces, detect_objects, image_feature
 from tell.modules.token_embedders import AdaptiveEmbedding
 from tell.modules import AdaptiveSoftmax
 class EarlyStopper:
@@ -34,6 +34,39 @@ class EarlyStopper:
             if self.counter >= self.patience:
                 return True
         return False
+     
+def pad_and_collate(batch):
+    from torch.nn.utils.rnn import pad_sequence
+
+    def pad_context_list(tensors, padding_value=0.0):
+        return pad_sequence(tensors, batch_first=True, padding_value=padding_value)
+
+    images = [item["image"] for item in batch]
+    captions = [item["caption"] for item in batch]
+    caption_ids = [item["caption_ids"] for item in batch]
+
+    contexts = {
+        "image": pad_context_list([item["contexts"]["image"] for item in batch]),
+        "image_mask": pad_context_list([item["contexts"]["image_mask"] for item in batch], padding_value=True),
+
+        "faces": pad_context_list([item["contexts"]["faces"] for item in batch]),
+        "faces_mask": pad_context_list([item["contexts"]["faces_mask"] for item in batch], padding_value=True),
+
+        "obj": pad_context_list([item["contexts"]["obj"] for item in batch]),
+        "obj_mask": pad_context_list([item["contexts"]["obj_mask"] for item in batch], padding_value=True),
+
+        "article": pad_context_list([item["contexts"]["article"] for item in batch]),
+        "article_mask": pad_context_list([item["contexts"]["article_mask"] for item in batch], padding_value=True),
+    }
+
+    caption_ids = pad_sequence(caption_ids, batch_first=True, padding_value=0)
+
+    return {
+        "image": torch.stack(images),
+        "caption": captions,
+        "caption_ids": caption_ids,
+        "contexts": contexts,
+    }
 
 class NewsCaptionDataset(Dataset):
     def __init__(self, data_dir, split, models, max_length=512):
@@ -71,7 +104,7 @@ class NewsCaptionDataset(Dataset):
         key = self.keys[idx]
         item = self.data[key]
         img_path = item["image_path"]
-        
+        device = self.models["device"]
         # Load and preprocess image
         img = Image.open(img_path).convert("RGB")
         img_tensor = self.preprocess(img)
@@ -79,41 +112,46 @@ class NewsCaptionDataset(Dataset):
         # Extract features
         contexts = {}
         with torch.no_grad():
+
             # Image features (49x2048)
             img_feat = image_feature(img, self.models["resnet"], 
                                     self.models["preprocess"], 
-                                    self.models["device"])
-            img_tensor = torch.tensor(img_feat).to(self.models["device"])
+                                    device)
+            img_tensor = torch.tensor(img_feat, device=device, dtype=torch.float)
             contexts["image"] = img_tensor
             contexts["image_mask"] = torch.zeros(
-                img_tensor.size(0), dtype=torch.bool, device=self.models["device"]
+                img_tensor.size(0), dtype=torch.bool, device=device
             )
             
             # Face features (up to 4 faces)
             face_info = detect_faces(img, self.models["mtcnn"], 
                                     self.models["facenet"], 
-                                    self.models["device"])
-            face_embeds = torch.tensor(face_info["embeddings"]).to(self.models["device"]) \
-                                if face_info["n_faces"] > 0 else torch.zeros((0, 512))
-            contexts["faces_mask"] = torch.isnan(face_embeds).any(dim=-1)
-            contexts["faces"] = face_embeds[contexts["faces_mask"]] = 0
+                                    device)
+            if face_info["n_faces"] > 0:
+                face_embeds = torch.tensor(face_info["embeddings"],
+                                        device=device, dtype=torch.float)
+            else:
+                face_embeds = torch.zeros((0, 512), device=device, dtype=torch.float)
+
+            faces_mask = torch.isnan(face_embeds).any(dim=-1)          
+            face_embeds[faces_mask] = 0.0                              
+            contexts["faces"] = face_embeds                          
+            contexts["faces_mask"] = faces_mask  
             
             # Object features (up to 64 objects)
             obj_feats = detect_objects(img_path, self.models["yolo"],
                                       self.models["resnet_object"],
                                       self.models["preprocess"],
-                                      self.models["device"])
+                                      device)
             if len(obj_feats) > 0:
-                obj_tensor = torch.tensor(obj_feats).to(self.models["device"])
+                obj_tensor = torch.tensor(obj_feats, device=device, dtype=torch.float)
                 obj_mask = torch.isnan(obj_tensor).any(dim=-1)
                 obj_tensor[obj_mask] = 0
                 contexts["obj"] = obj_tensor
-                contexts["obj_masks"] = obj_mask
+                contexts["obj_mask"] = obj_mask
             else:
-                # No detections, fallback
-                contexts["obj"] = torch.zeros((1, 1024), device=self.models["device"])
-                contexts["obj_masks"] = torch.tensor([True], device=self.models["device"])
-            
+                contexts["obj"] = torch.zeros((1, 1024), device=device, dtype=torch.float)
+                contexts["obj_mask"] = torch.ones((1,), dtype=torch.bool, device=device)
             # Article features
             context_txt = " ".join(item.get("context", []))
             art_embed = self.models["embedder"](context_txt)
@@ -122,8 +160,11 @@ class NewsCaptionDataset(Dataset):
             #                           self.models["roberta"],
             #                           self.models["vncore"],
             #                           self.models["device"])
-            contexts["article"] = torch.tensor(art_embed).to(self.models["device"]).unsqueeze(0)  # shape [1, D]
-            contexts["article_mask"] = torch.zeros((1,), dtype=torch.bool, device=self.models["device"])
+            art_embed = art_embed.to(device, dtype=torch.float)
+            contexts["article"] = art_embed                        
+            contexts["article_mask"] = torch.zeros(
+                art_embed.size(0), dtype=torch.bool, device=device
+            )
         
         # Process caption
         caption = item.get("caption", "")
@@ -212,13 +253,15 @@ def train_model(config):
         train_dataset,
         batch_size=config["batch_size"],
         shuffle=True,
-        num_workers=config["num_workers"]
+        num_workers=config["num_workers"],
+        collate_fn=pad_and_collate  
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=config["batch_size"],
         shuffle=False,
-        num_workers=config["num_workers"]
+        num_workers=config["num_workers"],
+        collate_fn=pad_and_collate
     )
     print("DATALOADER LOADED!")
     
@@ -274,7 +317,6 @@ def train_model(config):
     best_val_loss = float('inf')
     for epoch in range(config["epochs"]):
         model.train()
-        train_loss = 0
         total_tokens = 0
 
         # Training phase
@@ -365,7 +407,8 @@ def evaluate_model(model, config):
         test_dataset,
         batch_size=config["batch_size"],
         shuffle=False,
-        num_workers=config["num_workers"]
+        num_workers=config["num_workers"],
+        collate_fn=pad_and_collate
     )
     # Initialize adaptive embedder
     embedder = AdaptiveEmbedding(

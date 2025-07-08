@@ -56,6 +56,55 @@ from ultralytics import YOLO
 import re
 
 
+# class RobertaEmbedder(torch.nn.Module):
+#     def __init__(self, model, tokenizer, segmenter, device):
+#         super().__init__()
+#         self.model = model
+#         self.tokenizer = tokenizer
+#         self.segmenter = segmenter
+#         self.device = device
+#         self.num_layers = model.config.num_hidden_layers + 1  # +1 for embedding layer
+#         self.hidden_size = model.config.hidden_size
+#         # Learnable weights α_ℓ for each layer
+#         self.layer_weights = torch.nn.Parameter(torch.ones(self.num_layers) / self.num_layers)
+#     def forward(self, text: str) -> torch.Tensor:
+#         sentences = re.split(r'(?<=[\.!?])\s+', text.strip())
+#         token_embeds = []
+#         total_tokens = 0
+#         max_length = self.model.config.max_position_embeddings - 2 
+#         for sent in sentences:
+#             sent = sent.strip()
+#             if not sent or sent.count('·') >= 5:
+#                 continue
+
+#             # 1) tokenize with truncation
+#             toks = self.tokenizer(
+#                 sent,
+#                 truncation=True,
+#                 max_length=max_length,
+#                 max_length=self.model.config.max_position_embeddings,
+#                 return_tensors="pt",
+#             ).to(self.device)
+#             # print("max token ID:", toks["input_ids"].max().item())
+#             # print("vocab size   :", self.tokenizer.vocab_size)
+#             # 2) build dummy token_type_ids
+#             with torch.no_grad():
+#                 out = self.model(
+#                     **toks,
+#                     output_hidden_states=True,
+#                 )
+
+#             # 3) layer-weighted sum of hidden states
+#             hidden_states = torch.stack(out.hidden_states, dim=0)  # (layers, 1, seq_len, hidden)
+#             weights       = F.softmax(self.layer_weights, dim=0).view(-1, 1, 1, 1)
+#             weighted      = (weights * hidden_states).sum(dim=0).squeeze(0)  # (seq_len, hidden)
+#             token_embeds.append(weighted)
+
+#         if not token_embeds:
+#             return torch.zeros(1, self.hidden_size, device=self.device)
+
+#         # concatenate all sentence pieces
+#         return torch.cat(token_embeds, dim=0)  # (total_seq_len, hidden)
 class RobertaEmbedder(torch.nn.Module):
     def __init__(self, model, tokenizer, segmenter, device):
         super().__init__()
@@ -63,59 +112,60 @@ class RobertaEmbedder(torch.nn.Module):
         self.tokenizer = tokenizer
         self.segmenter = segmenter
         self.device = device
-        self.num_layers = model.config.num_hidden_layers + 1  # +1 for embedding layer
+        self.num_layers = model.config.num_hidden_layers + 1
         self.hidden_size = model.config.hidden_size
-        # Learnable weights α_ℓ for each layer
+        self.max_seq_len = 512  # Hard limit for RoBERTa
         self.layer_weights = torch.nn.Parameter(torch.ones(self.num_layers) / self.num_layers)
 
     def forward(self, text: str) -> torch.Tensor:
-        # Clean input
-        try:
-            text = text.encode('utf-8', 'ignore').decode('utf-8')
-        except Exception as e:
-            print(f"[WARN] Encoding issue: {e}")
-            return torch.zeros(1, self.hidden_size).to(self.device)
-
-        text = re.sub(r'[^\x00-\x7F]+', '', text)
+        # Clean and segment text
         sentences = re.split(r'(?<=[\.!?])\s+', text.strip())
+        if not sentences:
+            return torch.zeros(1, self.hidden_size, device=self.device)
 
-        token_embeds = []
+        # Process sentences with strict length control
+        embeddings = []
+        current_length = 0
+        
         for sent in sentences:
-            if not sent.strip() or sent.count('·') >= 5:
-                continue
-
-            seg_text = " ".join(self.segmenter.word_segment(sent.strip()))
-
-            batch = self.tokenizer(
-                seg_text,
-                return_tensors="pt",
+            sent = self.segmenter.word_segment(sent.strip())
+            # Tokenize with strict length checking
+            toks = self.tokenizer(
+                sent,
                 truncation=True,
-                max_length=self.model.config.max_position_embeddings
+                max_length=self.max_seq_len - current_length,
+                return_tensors="pt",
+                add_special_tokens=True
             ).to(self.device)
 
-            try:
-                with torch.no_grad():
-                    out = self.model(**batch, output_hidden_states=True)
-            except RuntimeError as e:
-                print(f"[WARN] RoBERTa GPU failed on sent: {sent} → {e}")
-                try:
-                    model_cpu = self.model.to("cpu")
-                    with torch.no_grad():
-                        out = model_cpu(**batch.cpu(), output_hidden_states=True)
-                    self.model.to(self.device)
-                except Exception as e2:
-                    print(f"[WARN] RoBERTa CPU also failed → {e2}")
-                    continue
+            # Skip if no space left
+            if toks.input_ids.size(1) == 0:
+                continue
 
-            hidden_states = torch.stack(out.hidden_states, dim=0)  # shape: (25, 1, seq_len, hidden_size)
-            weighted = (F.softmax(self.layer_weights, dim=0).view(-1, 1, 1, 1) * hidden_states).sum(dim=0)
-            # weighted: (1, seq_len, hidden_size)
-            token_embeds.append(weighted.squeeze(0))  # shape: (seq_len, hidden_size)
+            # Manually clamp position IDs
+            position_ids = torch.arange(0, toks.input_ids.size(1), dtype=torch.long, device=self.device)
+            position_ids = position_ids.unsqueeze(0)
+            toks['position_ids'] = position_ids.clamp(max=self.max_seq_len-1)
 
-        if not token_embeds:
-            return torch.zeros(1, self.hidden_size).to(self.device)
+            # Get hidden states
+            with torch.no_grad():
+                outputs = self.model(**toks, output_hidden_states=True)
+            
+            # Weighted sum of layers
+            hidden_states = torch.stack(outputs.hidden_states)  # [layers, 1, seq_len, hidden_size]
+            weights = torch.softmax(self.layer_weights, dim=0).view(-1, 1, 1, 1)
+            weighted_embedding = (weights * hidden_states).sum(dim=0).squeeze(0)  # [seq_len, hidden_size]
 
-        return torch.cat(token_embeds, dim=0)  # shape: (total_seq_len, hidden_size)
+            embeddings.append(weighted_embedding)
+            current_length += weighted_embedding.size(0)
+
+            if current_length >= self.max_seq_len:
+                break
+
+        if not embeddings:
+            return torch.zeros(1, self.hidden_size, device=self.device)
+
+        return torch.cat(embeddings)[:self.max_seq_len]  # Final truncation
 
 def setup_models(device: torch.device, vncorenlp_path="/data/npl/ICEK/VnCoreNLP"):
     py_vncorenlp.download_model(save_dir=vncorenlp_path)
@@ -141,8 +191,8 @@ def setup_models(device: torch.device, vncorenlp_path="/data/npl/ICEK/VnCoreNLP"
     yolo.fuse()                # fuse model for speed
     print("LOADED YOLOv5!")
     
-    phoBERTlocal = "/data/npl/ICEK/TnT/phoBERT/phobert-base"
-    tokenizer = AutoTokenizer.from_pretrained(phoBERTlocal, local_files_only=True)
+    phoBERTlocal = "/data/npl/ICEK/TnT/phoBERT_large/phobert-large"
+    tokenizer = AutoTokenizer.from_pretrained(phoBERTlocal, use_fast=False, local_files_only=True)
     roberta     = AutoModel    .from_pretrained(phoBERTlocal, use_safetensors=True, local_files_only=True).to(device).eval()
     embedder = RobertaEmbedder(roberta, tokenizer, vncore, device).to(device)
     print("LOADED phoBERT!")
