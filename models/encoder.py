@@ -114,58 +114,125 @@ class RobertaEmbedder(torch.nn.Module):
         self.device = device
         self.num_layers = model.config.num_hidden_layers + 1
         self.hidden_size = model.config.hidden_size
-        self.max_seq_len = 512  # Hard limit for RoBERTa
+        self.max_seq_len = model.config.max_position_embeddings
         self.layer_weights = torch.nn.Parameter(torch.ones(self.num_layers) / self.num_layers)
 
     def forward(self, text: str) -> torch.Tensor:
-        # Clean and segment text
         sentences = re.split(r'(?<=[\.!?])\s+', text.strip())
         if not sentences:
             return torch.zeros(1, self.hidden_size, device=self.device)
 
-        # Process sentences with strict length control
         embeddings = []
         current_length = 0
-        
+
         for sent in sentences:
-            sent = self.segmenter.word_segment(sent.strip())
-            # Tokenize with strict length checking
+            if current_length >= self.max_seq_len:
+                break
+            input = self.segmenter.word_segment(sent)[0]
             toks = self.tokenizer(
-                sent,
+                input,
                 truncation=True,
                 max_length=self.max_seq_len - current_length,
                 return_tensors="pt",
                 add_special_tokens=True
             ).to(self.device)
 
-            # Skip if no space left
             if toks.input_ids.size(1) == 0:
                 continue
 
-            # Manually clamp position IDs
-            position_ids = torch.arange(0, toks.input_ids.size(1), dtype=torch.long, device=self.device)
-            position_ids = position_ids.unsqueeze(0)
-            toks['position_ids'] = position_ids.clamp(max=self.max_seq_len-1)
+            with torch.no_grad():
+                outputs = self.model(**toks, output_hidden_states=True)
+            
+            hidden_states = torch.stack(outputs.hidden_states)  
+            weights = torch.softmax(self.layer_weights, dim=0).view(-1, 1, 1, 1)
+            weighted_embedding = (weights * hidden_states).sum(dim=0) 
+            
+            embeddings.append(weighted_embedding.squeeze(0))  
+            current_length += weighted_embedding.size(1)
 
+        if not embeddings:
+            return torch.zeros(1, self.hidden_size, device=self.device)
+
+        full_embedding = torch.cat(embeddings, dim=0)[:self.max_seq_len]
+        
+        if full_embedding.dim() == 1:
+            full_embedding = full_embedding.unsqueeze(0)
+            
+        return full_embedding
+
+class RobertaEmbedder(torch.nn.Module):
+    def __init__(self, model, tokenizer, segmenter, device):
+        super().__init__()
+        self.model = model
+        self.tokenizer = tokenizer
+        self.segmenter = segmenter
+        self.device = device
+        self.num_layers = model.config.num_hidden_layers + 1
+        self.hidden_size = model.config.hidden_size
+        self.max_position_embeddings = model.config.max_position_embeddings  # Usually 512
+        self.layer_weights = torch.nn.Parameter(torch.ones(self.num_layers) / self.num_layers)
+        
+        # Pre-calculate maximum token length per sentence
+        self.max_tokens_per_sentence = self.max_position_embeddings - 2  # Reserve for special tokens
+
+    def forward(self, text: str) -> torch.Tensor:
+        """Process text with absolute safety against position embedding overflow"""
+        # Clean and segment text
+        sentences = re.split(r'(?<=[\.!?])\s+', text.strip())
+        if not sentences:
+            return torch.zeros(1, self.hidden_size, device=self.device)
+
+        # Process each sentence with strict length control
+        embeddings = []
+        current_length = 0
+        
+        for sent in sentences:
+            # Skip if we've reached max length
+            if current_length >= self.max_position_embeddings:
+                break
+            input = self.segmenter.word_segment(sent)[0]
+                
+            # Calculate safe token limit
+            remaining = self.max_position_embeddings - current_length
+            max_length = min(remaining, self.max_tokens_per_sentence)
+            
+            # Tokenize with safety margins
+            toks = self.tokenizer(
+                input,
+                truncation=True,
+                max_length=max_length,
+                return_tensors="pt",
+                add_special_tokens=True
+            ).to(self.device)
+            
+            # Skip empty tokenizations
+            if toks.input_ids.size(1) == 0:
+                continue
+                
+            # Manually create SAFE position IDs
+            seq_len = toks.input_ids.size(1)
+            position_ids = torch.arange(0, seq_len, dtype=torch.long, device=self.device)
+            position_ids = position_ids.clamp(max=self.max_position_embeddings-1)
+            toks['position_ids'] = position_ids.unsqueeze(0)
+            
             # Get hidden states
             with torch.no_grad():
                 outputs = self.model(**toks, output_hidden_states=True)
             
             # Weighted sum of layers
-            hidden_states = torch.stack(outputs.hidden_states)  # [layers, 1, seq_len, hidden_size]
+            hidden_states = torch.stack(outputs.hidden_states)  # [layers, 1, seq_len, hidden]
             weights = torch.softmax(self.layer_weights, dim=0).view(-1, 1, 1, 1)
-            weighted_embedding = (weights * hidden_states).sum(dim=0).squeeze(0)  # [seq_len, hidden_size]
-
+            weighted_embedding = (weights * hidden_states).sum(dim=0).squeeze(0)  # [seq_len, hidden]
+            
             embeddings.append(weighted_embedding)
-            current_length += weighted_embedding.size(0)
-
-            if current_length >= self.max_seq_len:
-                break
+            current_length += seq_len  # Track total tokens
 
         if not embeddings:
             return torch.zeros(1, self.hidden_size, device=self.device)
-
-        return torch.cat(embeddings)[:self.max_seq_len]  # Final truncation
+        
+        # Combine and truncate
+        full_embedding = torch.cat(embeddings, dim=0)[:self.max_position_embeddings]
+        return full_embedding
 
 def setup_models(device: torch.device, vncorenlp_path="/data/npl/ICEK/VnCoreNLP"):
     py_vncorenlp.download_model(save_dir=vncorenlp_path)

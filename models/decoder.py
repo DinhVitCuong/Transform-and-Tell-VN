@@ -27,8 +27,11 @@ class DynamicConvFacesObjectsDecoder(Decoder):
                  tie_adaptive_proj=False, adaptive_softmax_factor=1, decoder_layers=4,
                  final_norm=True, padding_idx=0, swap=False):
         super().__init__()
+        self.weight_dropout = weight_dropout  # Already float
+        self.relu_dropout = relu_dropout      # Already float
+        self.input_dropout = input_dropout
         self.vocab_size = vocab_size
-        self.dropout = nn.Dropout(0.1)
+        self.dropout_prob = dropout
         self.share_input_output_embed = share_decoder_input_output_embed
 
         input_embed_dim = embedder.get_output_dim()
@@ -99,7 +102,7 @@ class DynamicConvFacesObjectsDecoder(Decoder):
         if self.project_in_dim is not None:
             X = self.project_in_dim(X)
 
-        X = F.dropout(X, p=self.dropout, training=self.training)
+        X = F.dropout(X, p=self.dropout_prob, training=self.training)
 
         # B x T x C -> T x B x C
         X = X.transpose(0, 1)
@@ -202,7 +205,7 @@ class DynamicConvDecoderLayer(nn.TransformerDecoderLayer):
         else:
             raise NotImplementedError
         self.linear2 = GehringLinear(self.conv_dim, self.embed_dim)
-
+        self.dropout_prob = 0.1
         self.relu_dropout = relu_dropout
         self.input_dropout = input_dropout
         self.normalize_before = decoder_normalize_before
@@ -254,7 +257,7 @@ class DynamicConvDecoderLayer(nn.TransformerDecoderLayer):
             X = self.act(X)
         X = self.conv(X, incremental_state=incremental_state)
         X = self.linear2(X)
-        X = F.dropout(X, p=self.dropout, training=self.training)
+        X = F.dropout(X, p=self.dropout_prob, training=self.training)
         X = residual + X
         X = self.maybe_layer_norm(self.conv_layer_norm, X, after=True)
 
@@ -273,7 +276,7 @@ class DynamicConvDecoderLayer(nn.TransformerDecoderLayer):
             incremental_state=None,
             static_kv=True,
             need_weights=(not self.training and self.need_attn))
-        X_image = F.dropout(X_image, p=self.dropout, training=self.training)
+        X_image = F.dropout(X_image, p=self.dropout_prob, training=self.training)
         X_image = residual + X_image
         X_image = self.maybe_layer_norm(
             self.context_attn_lns['image'], X_image, after=True)
@@ -293,7 +296,7 @@ class DynamicConvDecoderLayer(nn.TransformerDecoderLayer):
             incremental_state=None,
             static_kv=True,
             need_weights=(not self.training and self.need_attn))
-        X_article = F.dropout(X_article, p=self.dropout,
+        X_article = F.dropout(X_article, p=self.dropout_prob,
                               training=self.training)
         X_article = residual + X_article
         X_article = self.maybe_layer_norm(
@@ -314,7 +317,7 @@ class DynamicConvDecoderLayer(nn.TransformerDecoderLayer):
             incremental_state=None,
             static_kv=True,
             need_weights=(not self.training and self.need_attn))
-        X_faces = F.dropout(X_faces, p=self.dropout,
+        X_faces = F.dropout(X_faces, p=self.dropout_prob,
                             training=self.training)
         X_faces = residual + X_faces
         X_faces = self.maybe_layer_norm(
@@ -335,7 +338,7 @@ class DynamicConvDecoderLayer(nn.TransformerDecoderLayer):
             incremental_state=None,
             static_kv=True,
             need_weights=(not self.training and self.need_attn))
-        X_objs = F.dropout(X_objs, p=self.dropout,
+        X_objs = F.dropout(X_objs, p=self.dropout_prob,
                            training=self.training)
         X_objs = residual + X_objs
         X_objs = self.maybe_layer_norm(
@@ -352,7 +355,7 @@ class DynamicConvDecoderLayer(nn.TransformerDecoderLayer):
         X = F.relu(self.fc1(X))
         X = F.dropout(X, p=self.relu_dropout, training=self.training)
         X = self.fc2(X)
-        X = F.dropout(X, p=self.dropout, training=self.training)
+        X = F.dropout(X, p=self.dropout_prob, training=self.training)
         X = residual + X
         X = self.maybe_layer_norm(self.final_layer_norm, X, after=True)
         return X, attns
@@ -369,4 +372,4 @@ class DynamicConvDecoderLayer(nn.TransformerDecoderLayer):
 
     def extra_repr(self):
         return 'dropout={}, relu_dropout={}, input_dropout={}, normalize_before={}'.format(
-            self.dropout, self.relu_dropout, self.input_dropout, self.normalize_before)
+            self.dropout_prob, self.relu_dropout, self.input_dropout, self.normalize_before)

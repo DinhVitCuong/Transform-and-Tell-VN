@@ -123,6 +123,9 @@ class NewsCaptionDataset(Dataset):
                 img_tensor.size(0), dtype=torch.bool, device=device
             )
             
+            # print(f"[DEBUG] image tensor: {contexts['image'].shape}")
+            # print(f"[DEBUG] image mask tensor: {contexts['image_mask'].shape}")
+            
             # Face features (up to 4 faces)
             face_info = detect_faces(img, self.models["mtcnn"], 
                                     self.models["facenet"], 
@@ -137,6 +140,8 @@ class NewsCaptionDataset(Dataset):
             face_embeds[faces_mask] = 0.0                              
             contexts["faces"] = face_embeds                          
             contexts["faces_mask"] = faces_mask  
+            # print(f"[DEBUG] faces tensor: {contexts['faces'].shape}")
+            # print(f"[DEBUG] faces mask tensor: {contexts['faces_mask'].shape}")
             
             # Object features (up to 64 objects)
             obj_feats = detect_objects(img_path, self.models["yolo"],
@@ -153,6 +158,8 @@ class NewsCaptionDataset(Dataset):
                 contexts["obj"] = torch.zeros((1, 1024), device=device, dtype=torch.float)
                 contexts["obj_mask"] = torch.ones((1,), dtype=torch.bool, device=device)
             # Article features
+            # print(f"[DEBUG] obj tensor: {contexts['obj'].shape}")
+            # print(f"[DEBUG] obj mask tensor: {contexts['obj_mask'].shape}")
             context_txt = " ".join(item.get("context", []))
             art_embed = self.models["embedder"](context_txt)
             # art_embed = roberta_embed(context_txt, 
@@ -160,11 +167,16 @@ class NewsCaptionDataset(Dataset):
             #                           self.models["roberta"],
             #                           self.models["vncore"],
             #                           self.models["device"])
-            art_embed = art_embed.to(device, dtype=torch.float)
-            contexts["article"] = art_embed                        
-            contexts["article_mask"] = torch.zeros(
-                art_embed.size(0), dtype=torch.bool, device=device
-            )
+            # art_embed = art_embed.to(device, dtype=torch.float)
+            article_len = min(512, art_embed.size(0))
+            padded_article = torch.zeros((512, 1024), device=device)
+            padded_article[:article_len] = art_embed[:article_len]
+            
+            contexts["article"] = padded_article
+            contexts["article_mask"] = torch.zeros(512, device=device)
+            contexts["article_mask"][article_len:] = 1
+            # print(f"[DEBUG] article tensor: {contexts['article'].shape}")
+            # print(f"[DEBUG] article mask tensor: {contexts['article_mask'].shape}")
         
         # Process caption
         caption = item.get("caption", "")
@@ -197,22 +209,32 @@ class TransformAndTell(nn.Module):
         )
         
     def forward(self, prev_target, contexts, incremental_state=None):
-        return self.decoder(prev_target, contexts, incremental_state)
+        # Transpose context tensors to [seq_len, batch_size, hidden_dim]
+        transposed_contexts = {}
+        for key in ["image", "article", "faces", "obj"]:
+            # [batch_size, seq_len, hidden_dim] -> [seq_len, batch_size, hidden_dim]
+            transposed_contexts[key] = contexts[key].transpose(0, 1)
+            transposed_contexts[f"{key}_mask"] = contexts[f"{key}_mask"]
+            
+        return self.decoder(prev_target, transposed_contexts, incremental_state)
     
     def generate(self, contexts, max_length=100, temperature=1.0):
         """Generate caption from contexts"""
         # The quirks of dynamic convolution implementation: The context
         # embedding has dimension [seq_len, batch_size], but the mask has
         # dimension [batch_size, seq_len].
-        print(f"""CONTEXTS IMAGE_FEAT SHAPE: {contexts["image"].shape()}""")
-        print(f"""CONTEXTS ARTICLE SHAPE: {contexts["article"].shape()}""")
-        print(f"""CONTEXTS OBJECT SHAPE: {contexts["obj"].shape()}""")
-        print(f"""CONTEXTS FACES SHAPE: {contexts["faces"].shape()}""")
+        # print(f"""CONTEXTS IMAGE_FEAT SHAPE: {contexts["image"].shape}""")
+        # print(f"""CONTEXTS ARTICLE SHAPE: {contexts["article"].shape}""")
+        # print(f"""CONTEXTS OBJECT SHAPE: {contexts["obj"].shape}""")
+        # print(f"""CONTEXTS FACES SHAPE: {contexts["faces"].shape}""")
         contexts["image"]=contexts["image"].transpose(0, 1)
         contexts["article"]=contexts["article"].transpose(0, 1)
         contexts["obj"]=contexts["obj"].transpose(0, 1)
         contexts["faces"]=contexts["faces"].transpose(0, 1)
-        
+        transposed_contexts = {}
+        for key in ["image", "article", "faces", "obj"]:
+            transposed_contexts[key] = contexts[key].transpose(0, 1)
+            transposed_contexts[f"{key}_mask"] = contexts[f"{key}_mask"]
         self.eval()
         generated = []
         incremental_state = {}
