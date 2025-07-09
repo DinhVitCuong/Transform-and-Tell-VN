@@ -155,7 +155,7 @@ class NewsCaptionDataset(Dataset):
                 contexts["obj"] = obj_tensor
                 contexts["obj_mask"] = obj_mask
             else:
-                contexts["obj"] = torch.zeros((1, 1024), device=device, dtype=torch.float)
+                contexts["obj"] = torch.zeros((1, 2048), device=device, dtype=torch.float)
                 contexts["obj_mask"] = torch.ones((1,), dtype=torch.bool, device=device)
             # Article features
             # print(f"[DEBUG] obj tensor: {contexts['obj'].shape}")
@@ -171,10 +171,9 @@ class NewsCaptionDataset(Dataset):
             article_len = min(512, art_embed.size(0))
             padded_article = torch.zeros((512, 1024), device=device)
             padded_article[:article_len] = art_embed[:article_len]
-            
             contexts["article"] = padded_article
-            contexts["article_mask"] = torch.zeros(512, device=device)
-            contexts["article_mask"][article_len:] = 1
+            contexts["article_mask"] = torch.zeros(512, device=device, dtype=torch.bool)
+            contexts["article_mask"][article_len:] = True
             # print(f"[DEBUG] article tensor: {contexts['article'].shape}")
             # print(f"[DEBUG] article mask tensor: {contexts['article_mask'].shape}")
         
@@ -352,8 +351,12 @@ def train_model(config):
             #     logits.view(-1, config["vocab_size"]),
             #     caption_ids[:, 1:].contiguous().view(-1)
             # )
+            # loss, nll_loss = criterion(
+            #     logits.view(-1, logits.size(-1)),
+            #     caption_ids[:, 1:].contiguous().view(-1)
+            # )
             loss, nll_loss = criterion(
-                logits.view(-1, logits.size(-1)),
+                logits.reshape(-1, logits.size(-1)),
                 caption_ids[:, 1:].contiguous().view(-1)
             )
             # Normalize loss by number of tokens
@@ -392,8 +395,12 @@ def train_model(config):
                 # )
                 # val_loss += loss.item()
                 
+                # loss, nll_loss = criterion(
+                #     logits.view(-1, logits.size(-1)),
+                #     caption_ids[:, 1:].contiguous().view(-1)
+                # )
                 loss, nll_loss = criterion(
-                    logits.view(-1, logits.size(-1)),
+                    logits.reshape(-1, logits.size(-1)),
                     caption_ids[:, 1:].contiguous().view(-1)
                 )
                 # Normalize loss by number of tokens

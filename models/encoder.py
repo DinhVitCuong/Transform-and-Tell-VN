@@ -344,7 +344,6 @@ def detect_faces(img: Image.Image, mtcnn: MTCNN, facenet: InceptionResnetV1, dev
     }
 
 def detect_objects(image_path: str, model, resnet, preprocess, device):
-    projection = nn.Linear(2048, 1024).to(device).eval()
     img = Image.open(image_path).convert("RGB")
     results = model(image_path, conf=0.3, iou=0.45, max_det=64, verbose=False, show=False )     
     detections = []
@@ -363,9 +362,8 @@ def detect_objects(image_path: str, model, resnet, preprocess, device):
         tensor = preprocess(crop).unsqueeze(0).to(device)
         with torch.no_grad():
             feat_tensor = resnet(tensor).squeeze()   # still a Tensor
-            feat_1024   = projection(feat_tensor)
         # convert to plain Python list:
-        feat = feat_1024.cpu().tolist()
+            feat = feat_tensor.cpu().tolist()
         detections.append(feat)
     return detections
 
