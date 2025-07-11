@@ -12,6 +12,7 @@ from models.decoder import DynamicConvFacesObjectsDecoder
 from models.encoder import setup_models, extract_entities, detect_faces, detect_objects, image_feature
 from tell.modules.token_embedders import AdaptiveEmbedding
 from tell.modules import AdaptiveSoftmax
+Image.MAX_IMAGE_PIXELS = None
 class EarlyStopper:
     def __init__(self, patience=5, min_delta=0):
         """
@@ -89,6 +90,7 @@ class NewsCaptionDataset(Dataset):
         ])
         
         # Load data
+        self.data_pt_dir = "/data/npl/ICEK/TnT/dataset/images"
         with open(os.path.join(data_dir, f"{split}.json"), "r") as f:
             self.data = json.load(f)
         # define a stable ordering of keys
@@ -99,97 +101,135 @@ class NewsCaptionDataset(Dataset):
     def __len__(self):
         return len(self.keys)
     
+    # def __getitem__(self, idx):
+    #     # Map the integer idx → the JSON key string
+    #     key = self.keys[idx]
+    #     item = self.data[key]
+    #     img_path = item["image_path"]
+    #     device = self.models["device"]
+    #     # Load and preprocess image
+    #     img = Image.open(img_path).convert("RGB")
+    #     img_tensor = self.preprocess(img)
+        
+    #     # Extract features
+    #     contexts = {}
+    #     with torch.no_grad():
+
+    #         # Image features (49x2048)
+    #         img_feat = image_feature(img, self.models["resnet"], 
+    #                                 self.models["preprocess"], 
+    #                                 device)
+    #         img_tensor = torch.tensor(img_feat, device=device, dtype=torch.float)
+    #         contexts["image"] = img_tensor
+    #         contexts["image_mask"] = torch.zeros(
+    #             img_tensor.size(0), dtype=torch.bool, device=device
+    #         )
+            
+    #         # print(f"[DEBUG] image tensor: {contexts['image'].shape}")
+    #         # print(f"[DEBUG] image mask tensor: {contexts['image_mask'].shape}")
+            
+    #         # Face features (up to 4 faces)
+    #         face_info = detect_faces(img, self.models["mtcnn"], 
+    #                                 self.models["facenet"], 
+    #                                 device)
+    #         if face_info["n_faces"] > 0:
+    #             face_embeds = torch.tensor(face_info["embeddings"],
+    #                                     device=device, dtype=torch.float)
+    #         else:
+    #             face_embeds = torch.zeros((0, 512), device=device, dtype=torch.float)
+
+    #         faces_mask = torch.isnan(face_embeds).any(dim=-1)          
+    #         face_embeds[faces_mask] = 0.0                              
+    #         contexts["faces"] = face_embeds                          
+    #         contexts["faces_mask"] = faces_mask  
+    #         # print(f"[DEBUG] faces tensor: {contexts['faces'].shape}")
+    #         # print(f"[DEBUG] faces mask tensor: {contexts['faces_mask'].shape}")
+            
+    #         # Object features (up to 64 objects)
+    #         obj_feats = detect_objects(img_path, self.models["yolo"],
+    #                                   self.models["resnet_object"],
+    #                                   self.models["preprocess"],
+    #                                   device)
+    #         if len(obj_feats) > 0:
+    #             obj_tensor = torch.tensor(obj_feats, device=device, dtype=torch.float)
+    #             obj_mask = torch.isnan(obj_tensor).any(dim=-1)
+    #             obj_tensor[obj_mask] = 0
+    #             contexts["obj"] = obj_tensor
+    #             contexts["obj_mask"] = obj_mask
+    #         else:
+    #             contexts["obj"] = torch.zeros((1, 2048), device=device, dtype=torch.float)
+    #             contexts["obj_mask"] = torch.ones((1,), dtype=torch.bool, device=device)
+    #         # Article features
+    #         # print(f"[DEBUG] obj tensor: {contexts['obj'].shape}")
+    #         # print(f"[DEBUG] obj mask tensor: {contexts['obj_mask'].shape}")
+    #         context_txt = " ".join(item.get("context", []))
+    #         art_embed = self.models["embedder"](context_txt)
+    #         # art_embed = roberta_embed(context_txt, 
+    #         #                           self.models["tokenizer"],
+    #         #                           self.models["roberta"],
+    #         #                           self.models["vncore"],
+    #         #                           self.models["device"])
+    #         # art_embed = art_embed.to(device, dtype=torch.float)
+    #         article_len = min(512, art_embed.size(0))
+    #         padded_article = torch.zeros((512, 1024), device=device)
+    #         padded_article[:article_len] = art_embed[:article_len]
+    #         contexts["article"] = padded_article
+    #         contexts["article_mask"] = torch.zeros(512, device=device, dtype=torch.bool)
+    #         contexts["article_mask"][article_len:] = True
+    #         # print(f"[DEBUG] article tensor: {contexts['article'].shape}")
+    #         # print(f"[DEBUG] article mask tensor: {contexts['article_mask'].shape}")
+        
+    #     # Process caption
+    #     caption = item.get("caption", "")
+    #     caption_ids = self.tokenizer.encode(caption, 
+    #                                       return_tensors="pt",
+    #                                       truncation=True,
+    #                                       max_length=self.max_length)[0]
+        
+    #     return {
+    #         "image": img_tensor,
+    #         "contexts": contexts,
+    #         "caption_ids": caption_ids,
+    #         "caption": caption
+    #     }
     def __getitem__(self, idx):
-        # Map the integer idx → the JSON key string
         key = self.keys[idx]
         item = self.data[key]
         img_path = item["image_path"]
         device = self.models["device"]
-        # Load and preprocess image
-        img = Image.open(img_path).convert("RGB")
-        img_tensor = self.preprocess(img)
-        
-        # Extract features
-        contexts = {}
-        with torch.no_grad():
 
-            # Image features (49x2048)
-            img_feat = image_feature(img, self.models["resnet"], 
-                                    self.models["preprocess"], 
-                                    device)
-            img_tensor = torch.tensor(img_feat, device=device, dtype=torch.float)
-            contexts["image"] = img_tensor
-            contexts["image_mask"] = torch.zeros(
-                img_tensor.size(0), dtype=torch.bool, device=device
-            )
-            
-            # print(f"[DEBUG] image tensor: {contexts['image'].shape}")
-            # print(f"[DEBUG] image mask tensor: {contexts['image_mask'].shape}")
-            
-            # Face features (up to 4 faces)
-            face_info = detect_faces(img, self.models["mtcnn"], 
-                                    self.models["facenet"], 
-                                    device)
-            if face_info["n_faces"] > 0:
-                face_embeds = torch.tensor(face_info["embeddings"],
-                                        device=device, dtype=torch.float)
-            else:
-                face_embeds = torch.zeros((0, 512), device=device, dtype=torch.float)
+        # Load precomputed features
+        feature_path = os.path.join(self.data_pt_dir, f"{self.split}_features", f"{key}.pt")
+        features = torch.load(feature_path, map_location=device)
 
-            faces_mask = torch.isnan(face_embeds).any(dim=-1)          
-            face_embeds[faces_mask] = 0.0                              
-            contexts["faces"] = face_embeds                          
-            contexts["faces_mask"] = faces_mask  
-            # print(f"[DEBUG] faces tensor: {contexts['faces'].shape}")
-            # print(f"[DEBUG] faces mask tensor: {contexts['faces_mask'].shape}")
-            
-            # Object features (up to 64 objects)
-            obj_feats = detect_objects(img_path, self.models["yolo"],
-                                      self.models["resnet_object"],
-                                      self.models["preprocess"],
-                                      device)
-            if len(obj_feats) > 0:
-                obj_tensor = torch.tensor(obj_feats, device=device, dtype=torch.float)
-                obj_mask = torch.isnan(obj_tensor).any(dim=-1)
-                obj_tensor[obj_mask] = 0
-                contexts["obj"] = obj_tensor
-                contexts["obj_mask"] = obj_mask
-            else:
-                contexts["obj"] = torch.zeros((1, 2048), device=device, dtype=torch.float)
-                contexts["obj_mask"] = torch.ones((1,), dtype=torch.bool, device=device)
-            # Article features
-            # print(f"[DEBUG] obj tensor: {contexts['obj'].shape}")
-            # print(f"[DEBUG] obj mask tensor: {contexts['obj_mask'].shape}")
-            context_txt = " ".join(item.get("context", []))
-            art_embed = self.models["embedder"](context_txt)
-            # art_embed = roberta_embed(context_txt, 
-            #                           self.models["tokenizer"],
-            #                           self.models["roberta"],
-            #                           self.models["vncore"],
-            #                           self.models["device"])
-            # art_embed = art_embed.to(device, dtype=torch.float)
-            article_len = min(512, art_embed.size(0))
-            padded_article = torch.zeros((512, 1024), device=device)
-            padded_article[:article_len] = art_embed[:article_len]
-            contexts["article"] = padded_article
-            contexts["article_mask"] = torch.zeros(512, device=device, dtype=torch.bool)
-            contexts["article_mask"][article_len:] = True
-            # print(f"[DEBUG] article tensor: {contexts['article'].shape}")
-            # print(f"[DEBUG] article mask tensor: {contexts['article_mask'].shape}")
-        
-        # Process caption
-        caption = item.get("caption", "")
-        caption_ids = self.tokenizer.encode(caption, 
-                                          return_tensors="pt",
-                                          truncation=True,
-                                          max_length=self.max_length)[0]
-        
-        return {
+        img_tensor = features["image_feature"]
+        contexts = {
             "image": img_tensor,
-            "contexts": contexts,
-            "caption_ids": caption_ids,
-            "caption": caption
+            "image_mask": torch.zeros(img_tensor.size(0), dtype=torch.bool, device=device),
+            "faces": torch.tensor(features["face_info"]["embeddings"], device=device, dtype=torch.float) if features["face_info"]["n_faces"] > 0 else torch.zeros((0, 512), device=device, dtype=torch.float),
+            "faces_mask": torch.isnan(torch.tensor(features["face_info"]["embeddings"], device=device)).any(dim=-1) if features["face_info"]["n_faces"] > 0 else torch.ones((0,), dtype=torch.bool, device=device),
+            "obj": features["object_features"],
+            "obj_mask": torch.isnan(features["object_features"]).any(dim=-1) if features["object_features"].size(0) > 0 else torch.ones((1,), dtype=torch.bool, device=device),
+            "article": features["article_embed"],
+            "article_mask": torch.zeros(512, device=device, dtype=torch.bool),
         }
+        contexts["article_mask"][min(512, contexts["article"].size(0)):] = True
+
+        caption = item.get("caption", "")
+        caption_ids = self.tokenizer.encode(
+            caption,
+            return_tensors="pt",
+            truncation=True,
+            max_length=self.max_length
+        )[0]
+
+        return {
+        "image": img_tensor,
+        "contexts": contexts,
+        "caption_ids": caption_ids,
+        "caption": caption,
+        "image_path": img_path,
+    }
 
 class TransformAndTell(nn.Module):
     def __init__(self, vocab_size, embedder, decoder_params):
@@ -336,10 +376,11 @@ def train_model(config):
     print("START TRAINING!")
     # Training loop with validation
     best_val_loss = float('inf')
+    ce_loss = nn.CrossEntropyLoss(ignore_index=config["decoder_params"]["padding_idx"])
     for epoch in range(config["epochs"]):
         model.train()
         total_tokens = 0
-
+        total_loss_val=0
         # Training phase
         for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}"):
             caption_ids = batch["caption_ids"].to(device)
@@ -347,35 +388,53 @@ def train_model(config):
             
             optimizer.zero_grad()
             logits, _ = model(caption_ids[:, :-1], contexts)
-            # loss = criterion(
-            #     logits.view(-1, config["vocab_size"]),
-            #     caption_ids[:, 1:].contiguous().view(-1)
-            # )
+            
             # loss, nll_loss = criterion(
-            #     logits.view(-1, logits.size(-1)),
+            #     logits.reshape(-1, logits.size(-1)),
             #     caption_ids[:, 1:].contiguous().view(-1)
             # )
-            loss, nll_loss = criterion(
-                logits.reshape(-1, logits.size(-1)),
-                caption_ids[:, 1:].contiguous().view(-1)
-            )
-            # Normalize loss by number of tokens
-            num_tokens = (caption_ids[:, 1:] != config["decoder_params"]["padding_idx"]).sum()
-            normalized_loss = loss / num_tokens
-            # loss.backward()
+            # # Normalize loss by number of tokens
+            # num_tokens = (caption_ids[:, 1:] != config["decoder_params"]["padding_idx"]).sum()
+            # normalized_loss = loss / num_tokens
+            # # loss.backward()
+            # # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
+            # # optimizer.step()
+            
+            # # train_loss += loss.item()
+            # # Backward pass
+            # optimizer.zero_grad()
+            # normalized_loss.backward()
             # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
             # optimizer.step()
             
-            # train_loss += loss.item()
+            # total_loss += loss.item()
+            # total_tokens += num_tokens.item()# Compute loss using AdaptiveSoftmax output
+            output, new_target = criterion(
+                logits.reshape(-1, logits.size(-1)),
+                caption_ids[:, 1:].contiguous().view(-1)
+            )
+            
+            # Initialize cross-entropy loss with ignore_index for padding
+            
+            # Compute total loss by summing losses for each cluster
+            total_loss = 0
+            for out, tgt in zip(output, new_target):
+                if out is not None and tgt is not None:
+                    # out: (batch_size, num_classes), tgt: (batch_size,)
+                    total_loss += ce_loss(out, tgt)
+            
+            # Normalize loss by number of tokens
+            num_tokens = (caption_ids[:, 1:] != config["decoder_params"]["padding_idx"]).sum()
+            normalized_loss = total_loss / num_tokens
+            
             # Backward pass
-            optimizer.zero_grad()
             normalized_loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
             optimizer.step()
             
-            total_loss += loss.item()
+            total_loss_val += total_loss.item()
             total_tokens += num_tokens.item()
-        avg_loss = total_loss / total_tokens
+        avg_loss = total_loss_val / total_tokens
         print(f"Epoch {epoch+1}, Train Loss: {avg_loss:.4f}, Train Tokens: {total_tokens}")
         
         # avg_train_loss = train_loss / len(train_loader)
@@ -465,6 +524,41 @@ def evaluate_model(model, config):
 
     # criterion = nn.CrossEntropyLoss(ignore_index=test_dataset.tokenizer.pad_token_id)
     
+    # with torch.no_grad():
+    #     for batch in tqdm(test_loader, desc="Evaluating"):
+    #         caption_ids = batch["caption_ids"].to(device)
+    #         contexts = {k: v.to(device) for k, v in batch["contexts"].items()}
+            
+    #         # Forward pass
+    #         logits, _ = model(caption_ids[:, :-1], contexts)
+            
+    #         # Calculate loss
+            
+    #         loss, nll_loss = criterion(
+    #             logits.view(-1, logits.size(-1)),
+    #             caption_ids[:, 1:].contiguous().view(-1)
+    #         )
+    #         print(f"loss type: {type(loss)}, loss: {loss}")
+    #         print(f"nll_loss type: {type(nll_loss)}, nll_loss: {nll_loss}")
+    #         # Normalize loss by number of tokens
+    #         num_tokens = (caption_ids[:, 1:] != config["decoder_params"]["padding_idx"]).sum()
+    #         test_loss += loss.item()
+    #         test_total_tokens += num_tokens.item()
+            
+    #         # Generate captions
+    #         for i in range(len(batch["image"])):
+    #             contexts_i = {k: v[i].unsqueeze(0) for k, v in contexts.items()}
+    #             generated_ids = model.generate(contexts_i)
+    #             generated_caption = test_dataset.tokenizer.decode(generated_ids)
+    #             all_predictions.append({
+    #                 "image_path": batch["image_path"][i],
+    #                 "true_caption": batch["caption"][i],
+    #                 "predicted_caption": generated_caption
+    #             })
+    
+    # test_avg_loss = total_loss / len(test_loader)    
+    # print(f"Test Loss: {test_avg_loss:.4f}, Test Tokens: {test_total_tokens}")
+    ce_loss = nn.CrossEntropyLoss(ignore_index=config["decoder_params"]["padding_idx"])
     with torch.no_grad():
         for batch in tqdm(test_loader, desc="Evaluating"):
             caption_ids = batch["caption_ids"].to(device)
@@ -473,18 +567,24 @@ def evaluate_model(model, config):
             # Forward pass
             logits, _ = model(caption_ids[:, :-1], contexts)
             
-            # Calculate loss
-            
-            loss, nll_loss = criterion(
-                logits.view(-1, logits.size(-1)),
+            # Compute loss using AdaptiveSoftmax output
+            output, new_target = criterion(
+                logits.reshape(-1, logits.size(-1)),
                 caption_ids[:, 1:].contiguous().view(-1)
             )
+            
+            # Compute total loss
+            total_loss = 0
+            for out, tgt in zip(output, new_target):
+                if out is not None and tgt is not None:
+                    total_loss += ce_loss(out, tgt)
+            
             # Normalize loss by number of tokens
             num_tokens = (caption_ids[:, 1:] != config["decoder_params"]["padding_idx"]).sum()
-            test_loss += loss.item()
+            test_loss += total_loss.item()
             test_total_tokens += num_tokens.item()
             
-            # Generate captions
+            # Generate captions (unchanged)
             for i in range(len(batch["image"])):
                 contexts_i = {k: v[i].unsqueeze(0) for k, v in contexts.items()}
                 generated_ids = model.generate(contexts_i)
@@ -494,8 +594,8 @@ def evaluate_model(model, config):
                     "true_caption": batch["caption"][i],
                     "predicted_caption": generated_caption
                 })
-    
-    test_avg_loss = total_loss / len(test_loader)    
+
+    test_avg_loss = test_loss / test_total_tokens
     print(f"Test Loss: {test_avg_loss:.4f}, Test Tokens: {test_total_tokens}")
         
     
