@@ -90,7 +90,7 @@ class NewsCaptionDataset(Dataset):
         ])
         
         # Load data
-        self.data_pt_dir = "/data/npl/ICEK/TnT/dataset/images"
+        self.data_pt_dir = "/data/npl/ICEK/TnT/dataset/content"
         with open(os.path.join(data_dir, f"{split}.json"), "r") as f:
             self.data = json.load(f)
         # define a stable ordering of keys

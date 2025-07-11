@@ -55,7 +55,7 @@ from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normal
 from ultralytics import YOLO
 import re
 Image.MAX_IMAGE_PIXELS = None
-
+os.environ['JAVA_OPTS'] = '-Xms2g -Xmx4g'
 class RobertaEmbedder(torch.nn.Module):
     def __init__(self, model, tokenizer, segmenter, device):
         super().__init__()
@@ -132,7 +132,10 @@ class RobertaEmbedder(torch.nn.Module):
 
 def setup_models(device: torch.device, vncorenlp_path="/data/npl/ICEK/VnCoreNLP"):
     py_vncorenlp.download_model(save_dir=vncorenlp_path)
-    vncore = py_vncorenlp.VnCoreNLP(annotators=["wseg", "pos", "ner", "parse"], save_dir=vncorenlp_path)
+    vncore = py_vncorenlp.VnCoreNLP(
+        annotators=["wseg", "pos", "ner", "parse"],
+        save_dir=vncorenlp_path
+    )
     print("LOADED VNCORENLP!")
     
     # Face detection + embedding
