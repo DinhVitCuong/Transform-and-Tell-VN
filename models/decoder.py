@@ -220,7 +220,7 @@ class DynamicConvDecoderLayer(nn.TransformerDecoderLayer):
             self.embed_dim, decoder_attention_heads, kdim=C, vdim=C,
             dropout=attention_dropout)
         self.context_attn_lns['image'] = nn.LayerNorm(self.embed_dim)
-
+        self.layer_weights = nn.Parameter(torch.ones(25) / 25)  # 25 layers for phoBERT-large
         self.context_attns['article'] = MultiHeadAttention(
             self.embed_dim, decoder_attention_heads, kdim=1024, vdim=1024,
             dropout=attention_dropout)
@@ -288,6 +288,11 @@ class DynamicConvDecoderLayer(nn.TransformerDecoderLayer):
         residual = X
         X_article = self.maybe_layer_norm(
             self.context_attn_lns['article'], X, before=True)
+        # Apply layer weights to combine PhoBERT hidden states
+        article_hidden = contexts['article']
+        weights = F.softmax(self.layer_weights, dim=0).view(-1, 1, 1, 1)
+        article_weighted = (weights * article_hidden).sum(dim=0)
+        contexts['article'] = article_weighted
         X_article, attn = self.context_attns['article'](
             query=X_article,
             key=contexts['article'],
