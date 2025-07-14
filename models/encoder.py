@@ -23,7 +23,7 @@ For each item this script will:
 * detect objects using **YoloV8** and encode them with **ResNet152** We filter out objects with a confidence less than 0.3 and select up to 64 objects
 * run **VnCoreNLP** to obtain ``caption_ner`` and ``context_ner``
 * extract a global image feature with **ResNet152**
-* embed the article text using a **RoBERTa** model (PhoBERT for Vietnamese), saving raw last hidden state
+* embed the article text using a **RoBERTa** model (PhoBERT for Vietnamese), saving all hidden states
 
 The resulting features are stored in an HDF5 file (e.g., `train_features.h5`) with datasets for each sample ID.
 """
@@ -57,35 +57,34 @@ Image.MAX_IMAGE_PIXELS = None
 logging.basicConfig(filename="preprocess.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 class RobertaEmbedder(torch.nn.Module):
-    def __init__(self, model, tokenizer, segmenter, device):
+    def __init__(self, model, tokenizer, device):
         super().__init__()
         self.model = model
         self.tokenizer = tokenizer
-        self.segmenter = segmenter
         self.device = device
         self.hidden_size = model.config.hidden_size
         self.num_layers = model.config.num_hidden_layers + 1  # Include input embedding layer
         self.max_position_embeddings = model.config.max_position_embeddings  # Usually 512
         self.max_tokens_per_sentence = self.max_position_embeddings - 2  # Reserve for special tokens
 
-    def forward(self, texts: List[str]) -> torch.Tensor:
-        """Process a batch of texts, returning all PhoBERT hidden states"""
+    def forward(self, texts: List[str], segmented_texts: List[str]) -> torch.Tensor:
+        """Process a batch of pre-segmented texts, returning all PhoBERT hidden states"""
         embeddings = []
-        for text in texts:
+        for text, segmented in zip(texts, segmented_texts):
             sentences = re.split(r'(?<=[\.!?])\s+', text.strip())
-            if not sentences:
+            seg_sentences = segmented.split(' <SEP> ') if segmented else []
+            if not sentences or not seg_sentences:
                 embeddings.append(torch.zeros(self.num_layers, 1, self.hidden_size, device=self.device))
                 continue
 
             sent_embeddings = []
             current_length = 0
-            for sent in sentences:
+            for sent, seg_sent in zip(sentences, seg_sentences):
                 if current_length >= self.max_position_embeddings:
                     break
-                try:
-                    input = self.segmenter.word_segment(sent)[0]
-                except:
-                    input = sent
+                input = seg_sent.strip()
+                if not input:
+                    continue
                 remaining = self.max_position_embeddings - current_length
                 max_length = min(remaining, self.max_tokens_per_sentence)
                 toks = self.tokenizer(
@@ -120,12 +119,9 @@ class RobertaEmbedder(torch.nn.Module):
 
 def setup_models(device: torch.device, vncorenlp_path="/data/npl/ICEK/VnCoreNLP"):
     py_vncorenlp.download_model(save_dir=vncorenlp_path)
-    vncore = py_vncorenlp.VnCoreNLP(
-        annotators=["wseg", "ner"],
-        save_dir=vncorenlp_path,
-        max_heap_size='-Xmx6g'
-    )
-    logging.info("Loaded VnCoreNLP")
+    # VnCoreNLP is initialized in the main process only
+    vncore = None  # Will be initialized in convert_items
+    logging.info("VnCoreNLP will be initialized in main process")
     mtcnn = MTCNN(keep_all=True, device=device)
     facenet = InceptionResnetV1(pretrained="vggface2").eval().to(device)
     logging.info("Loaded FaceNet")
@@ -140,7 +136,7 @@ def setup_models(device: torch.device, vncorenlp_path="/data/npl/ICEK/VnCoreNLP"
     phoBERTlocal = "/data/npl/ICEK/TnT/phoBERT_large/phobert-large"
     tokenizer = AutoTokenizer.from_pretrained(phoBERTlocal, use_fast=False, local_files_only=True)
     roberta = AutoModel.from_pretrained(phoBERTlocal, use_safetensors=True, local_files_only=True).to(device).eval()
-    embedder = RobertaEmbedder(roberta, tokenizer, vncore, device).to(device)
+    embedder = RobertaEmbedder(roberta, tokenizer, device).to(device)
     logging.info("Loaded PhoBERT")
     preprocess = Compose([
         ToTensor(),
@@ -152,10 +148,9 @@ def setup_models(device: torch.device, vncorenlp_path="/data/npl/ICEK/VnCoreNLP"
         "facenet": facenet,
         "resnet": resnet,
         "resnet_object": resnet_object,
-        "roberta": roberta,
-        "tokenizer": tokenizer,
-        "embedder": embedder,
         "yolo": yolo,
+        "embedder": embedder,
+        "tokenizer": tokenizer,
         "preprocess": preprocess,
         "device": device,
     }
@@ -191,6 +186,24 @@ def extract_entities(text: str, model) -> Dict[str, List[str]]:
             logging.error(f"Error annotating text: {e}")
             continue
     return {typ: sorted(vals) for typ, vals in entities.items()}
+
+def segment_text(text: str, model) -> str:
+    """Segment text using VnCoreNLP and join sentences with a separator"""
+    sentences = re.split(r'(?<=[\.!?])\s+', text.strip())
+    if not sentences:
+        return ""
+    segmented_sentences = []
+    for sent in sentences:
+        sent = sent.strip()
+        if not sent:
+            continue
+        try:
+            segmented = model.word_segment(sent)[0]
+            segmented_sentences.append(segmented)
+        except Exception as e:
+            logging.error(f"Error segmenting text: {e}")
+            segmented_sentences.append(sent)
+    return " <SEP> ".join(segmented_sentences)
 
 def detect_faces_batch(images: List[Image.Image], mtcnn: MTCNN, facenet: InceptionResnetV1, device: torch.device, max_faces=4) -> List[dict]:
     with torch.no_grad():
@@ -257,8 +270,7 @@ def image_feature_batch(images: List[Image.Image], resnet: torch.nn.Module, devi
         features.extend(patches.cpu().numpy().tolist())
     return features
 
-def process_batch(batch: List[Tuple[str, dict]], models: dict, image_out: str = None) -> Tuple[List[dict], Dict[str, dict], List[dict]]:
-    vncore = models["vncore"]
+def process_batch(batch: List[Tuple[str, dict, str, dict, dict]], models: dict, image_out: str = None) -> Tuple[List[dict], Dict[str, dict], List[dict]]:
     mtcnn = models["mtcnn"]
     facenet = models["facenet"]
     resnet = models["resnet"]
@@ -272,10 +284,12 @@ def process_batch(batch: List[Tuple[str, dict]], models: dict, image_out: str = 
     image_paths = []
     images = []
     captions = []
-    contexts = []
+    segmented_contexts = []
+    cap_ners = []
+    ctx_ners = []
     sample_ids = []
 
-    for sid, item in batch:
+    for sid, item, segmented_context, cap_ner, ctx_ner in batch:
         img_path = item["image_path"]
         sample_id = str(sid)
         sample_ids.append(sample_id)
@@ -286,7 +300,9 @@ def process_batch(batch: List[Tuple[str, dict]], models: dict, image_out: str = 
             logging.error(f"Error loading image {img_path}: {e}")
             continue
         captions.append(item.get("caption", ""))
-        contexts.append(" ".join(item.get("context", [])))
+        segmented_contexts.append(segmented_context)
+        cap_ners.append(cap_ner)
+        ctx_ners.append(ctx_ner)
         if image_out:
             os.makedirs(image_out, exist_ok=True)
             dst = os.path.join(image_out, f"{sample_id}.jpg")
@@ -299,16 +315,14 @@ def process_batch(batch: List[Tuple[str, dict]], models: dict, image_out: str = 
     face_infos = detect_faces_batch(images, mtcnn, facenet, device)
     obj_feats_batch = detect_objects_batch(image_paths, yolo, resnet_object, preprocess, device)
     img_feats_batch = image_feature_batch(images, resnet, device)
-    cap_ners = [extract_entities(cap, vncore) for cap in captions]
-    ctx_ners = [extract_entities(ctx, vncore) for ctx in contexts]
-    art_embeds = embedder(contexts).cpu().numpy()
+    art_embeds = embedder(captions, segmented_contexts).cpu().numpy()
 
-    for i, (sid, item) in enumerate(batch):
+    for i, (sid, item, segmented_context, cap_ner, ctx_ner) in enumerate(batch):
         sample_id = str(sid)
         try:
             articles[sample_id] = {
                 "_id": sample_id,
-                "context": contexts[i],
+                "context": " ".join(item.get("context", [])),
                 "images": [captions[i]],
                 "web_url": "",
                 "caption_ner": [cap_ners[i]],
@@ -326,7 +340,7 @@ def process_batch(batch: List[Tuple[str, dict]], models: dict, image_out: str = 
                 "image_feature": np.array(img_feats_batch[i], dtype=np.float32),
                 "face_info": face_infos[i],
                 "object_features": np.array(obj_feats_batch[i], dtype=np.float32) if obj_feats_batch[i] else np.zeros((1, 2048), dtype=np.float32),
-                "article_embed": art_embeds[i],
+                "article_embed": art_embeds[i],  # [num_layers, seq_len, hidden_size]
                 "caption_ner": cap_ners[i],
                 "context_ner": ctx_ners[i],
             }
@@ -339,6 +353,26 @@ def convert_items(items: Dict[str, dict], split: str, models: dict, output_dir: 
     samples, articles, objects = [], {}, []
     hdf5_path = os.path.join(output_dir, f"{split}_features.h5")
     processed_ids = set()
+
+    # Initialize VnCoreNLP in the main process
+    vncore = py_vncorenlp.VnCoreNLP(
+        annotators=["wseg", "pos", "ner", "parse"],
+        save_dir=models["vncorenlp_path"],
+        max_heap_size='-Xmx6g'
+    )
+    logging.info("Loaded VnCoreNLP in main process")
+
+    # Preprocess texts for segmentation and NER
+    items_to_process = []
+    for sid, item in items.items():
+        if str(sid) in processed_ids:
+            continue
+        context = " ".join(item.get("context", []))
+        caption = item.get("caption", "")
+        segmented_context = segment_text(context, vncore)
+        cap_ner = extract_entities(caption, vncore)
+        ctx_ner = extract_entities(context, vncore)
+        items_to_process.append((sid, item, segmented_context, cap_ner, ctx_ner))
 
     # Load existing HDF5 data if available
     if os.path.exists(hdf5_path):
@@ -357,16 +391,20 @@ def convert_items(items: Dict[str, dict], split: str, models: dict, output_dir: 
                 with open(objects_path, "r", encoding="utf-8") as of:
                     objects = json.load(of)
         logging.info(f"Loaded existing data for split {split}: {len(processed_ids)} samples")
+        items_to_process = [(sid, item, seg, cner, ctxner) for sid, item, seg, cner, ctxner in items_to_process if str(sid) not in processed_ids]
 
-    items_to_process = [(sid, item) for sid, item in items.items() if str(sid) not in processed_ids]
     total_items = len(items_to_process)
     processed_count = 0
+
+    # Update models to remove vncore
+    models_without_vncore = {k: v for k, v in models.items() if k != "vncore"}
+    models_without_vncore["vncorenlp_path"] = models["vncorenlp_path"]
 
     with h5py.File(hdf5_path, "a") as hdf5_file, ProcessPoolExecutor(max_workers=num_workers) as executor:
         futures = []
         for i in range(0, len(items_to_process), batch_size):
             batch = items_to_process[i:i+batch_size]
-            futures.append(executor.submit(process_batch, batch, models, image_out))
+            futures.append(executor.submit(process_batch, batch, models_without_vncore, image_out))
         for future in tqdm(as_completed(futures), total=len(futures), desc=f"Processing {split}"):
             try:
                 for sample_id, features, batch_samples, batch_articles, batch_objects in future.result():
@@ -390,6 +428,7 @@ def convert_items(items: Dict[str, dict], split: str, models: dict, output_dir: 
 
     save_checkpoint(samples, articles, objects, output_dir, split)
     logging.info(f"Completed processing {processed_count}/{total_items} items for split {split}")
+    vncore.close()
     return samples, articles, objects
 
 def load_split(path: str) -> Dict[str, dict]:
@@ -410,18 +449,19 @@ def save_checkpoint(samples: List[dict], articles: Dict[str, dict], objects: Lis
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Create ViWiki dataset files")
-    parser.add_argument("--data_dir", nargs="?", default="/data/npl/ICEK/Wikipedia/content/ver4", help="Directory with train/val/test JSON")
-    parser.add_argument("--output_dir", nargs="?", default="/data/npl/ICEK/TnT/dataset/content", help="Directory to write converted files")
+    parser.add_argument("data_dir", nargs="?", default="/data/npl/ICEK/Wikipedia/content/ver4", help="Directory with train/val/test JSON")
+    parser.add_argument("output_dir", nargs="?", default="/data/npl/ICEK/TnT/dataset/content", help="Directory to write converted files")
     parser.add_argument("--image-out", default=None, dest="image_out", help="Optional directory to copy images")
     parser.add_argument("--vncorenlp", default="/data/npl/ICEK/VnCoreNLP", help="Path to VnCoreNLP jar file")
     parser.add_argument("--checkpoint-interval", type=int, default=100, help="Save checkpoint every N items")
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size for processing")
     parser.add_argument("--num-workers", type=int, default=4, help="Number of worker processes")
     args = parser.parse_args()
-    print("Loaded arguments")
+    logging.info("Loaded arguments")
     os.makedirs(args.output_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     models = setup_models(device, args.vncorenlp)
+    models["vncorenlp_path"] = args.vncorenlp
     for split in ["train", "val", "test"]:
         split_data = load_split(os.path.join(args.data_dir, f"{split}.json"))
         samples, articles, objects = convert_items(split_data, split, models, args.output_dir, args.image_out, args.checkpoint_interval, args.batch_size, args.num_workers)
