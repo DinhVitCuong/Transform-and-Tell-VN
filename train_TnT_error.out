@@ -1,0 +1,17 @@
+Traceback (most recent call last):
+  File "/data/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 427, in <module>
+    samples, articles, objects = convert_items(split_data, split, models, args.output_dir, args.image_out, args.checkpoint_interval, args.batch_size, args.num_workers)
+  File "/data/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 345, in convert_items
+    with h5py.File(hdf5_path, "r") as f:
+  File "/data/npl/ICEK/TnT/prepro_TnT_env/lib/python3.9/site-packages/h5py/_hl/files.py", line 564, in __init__
+    fid = make_fid(name, mode, userblock_size, fapl, fcpl, swmr=swmr)
+  File "/data/npl/ICEK/TnT/prepro_TnT_env/lib/python3.9/site-packages/h5py/_hl/files.py", line 238, in make_fid
+    fid = h5f.open(name, flags, fapl=fapl)
+  File "h5py/_objects.pyx", line 56, in h5py._objects.with_phil.wrapper
+  File "h5py/_objects.pyx", line 57, in h5py._objects.with_phil.wrapper
+  File "h5py/h5f.pyx", line 102, in h5py.h5f.open
+BlockingIOError: [Errno 11] Unable to synchronously open file (unable to lock file, errno = 11, error message = 'Resource temporarily unavailable')
+Traceback (most recent call last):
+  File "/data/npl/ICEK/TnT/Transform-and-Tell-VN/main.py", line 12, in <module>
+    from models.encoder import setup_models, extract_entities, detect_faces, detect_objects, image_feature
+ImportError: cannot import name 'detect_faces' from 'models.encoder' (/data/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py)
