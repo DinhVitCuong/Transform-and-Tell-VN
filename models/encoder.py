@@ -55,6 +55,7 @@ Image.MAX_IMAGE_PIXELS = None
 
 # Set up logging
 logging.basicConfig(filename="preprocess.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(filename="debug_preprocess.log", level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 
 class RobertaEmbedder(torch.nn.Module):
     def __init__(self, model, tokenizer, device):
@@ -117,7 +118,7 @@ class RobertaEmbedder(torch.nn.Module):
             padded_embeddings[i, :, :emb.size(1)] = emb
         return padded_embeddings  # [batch_size, num_layers, seq_len, hidden_size]
 
-def setup_models(device: torch.device, vncorenlp_path="/data/npl/ICEK/VnCoreNLP"):
+def setup_models(device: torch.device, vncorenlp_path="/data2/npl/ICEK/VnCoreNLP"):
     py_vncorenlp.download_model(save_dir=vncorenlp_path)
     # VnCoreNLP is initialized in the main process only
     vncore = None  # Will be initialized in convert_items
@@ -133,7 +134,7 @@ def setup_models(device: torch.device, vncorenlp_path="/data/npl/ICEK/VnCoreNLP"
     yolo = YOLO("yolov8m.pt")
     yolo.fuse()
     logging.info("Loaded YOLOv8")
-    phoBERTlocal = "/data/npl/ICEK/TnT/phoBERT_large/phobert-large"
+    phoBERTlocal = "/data2/npl/ICEK/TnT/phoBERT_large/phobert-large"
     tokenizer = AutoTokenizer.from_pretrained(phoBERTlocal, use_fast=False, local_files_only=True)
     roberta = AutoModel.from_pretrained(phoBERTlocal, use_safetensors=True, local_files_only=True).to(device).eval()
     embedder = RobertaEmbedder(roberta, tokenizer, device).to(device)
@@ -290,7 +291,8 @@ def process_batch(batch: List[Tuple[str, dict, str, dict, dict]], models: dict, 
     sample_ids = []
 
     for sid, item, segmented_context, cap_ner, ctx_ner in batch:
-        img_path = item["image_path"]
+        img_id = item["image_path"].split("images/")[1]
+        img_path = f"/data2/npl/ICEK/Wikipedia/images_resized/{image_id}"
         sample_id = str(sid)
         sample_ids.append(sample_id)
         image_paths.append(img_path)
@@ -364,15 +366,51 @@ def convert_items(items: Dict[str, dict], split: str, models: dict, output_dir: 
 
     # Preprocess texts for segmentation and NER
     items_to_process = []
-    for sid, item in items.items():
+    logging.info(f"Started preprocessing texts for split {split}")
+
+    # for sid, item in items.items():
+    #     if str(sid) in processed_ids:
+    #         continue
+    #     context = " ".join(item.get("context", []))
+    #     caption = item.get("caption", "")
+    #     segmented_context = segment_text(context, vncore)
+    #     cap_ner = extract_entities(caption, vncore)
+    #     ctx_ner = extract_entities(context, vncore)
+    #     items_to_process.append((sid, item, segmented_context, cap_ner, ctx_ner))
+    for idx, (sid, item) in enumerate(items.items()):
         if str(sid) in processed_ids:
             continue
+        
+        # Log every 100th item
+        if idx % 100 == 0:
+            logging.info(f"Processing item {sid} ({idx + 1}/{len(items)})...")
+
         context = " ".join(item.get("context", []))
         caption = item.get("caption", "")
-        segmented_context = segment_text(context, vncore)
-        cap_ner = extract_entities(caption, vncore)
-        ctx_ner = extract_entities(context, vncore)
-        items_to_process.append((sid, item, segmented_context, cap_ner, ctx_ner))
+        # Log the context and caption being processed
+        
+        if idx % 100 == 0:
+            logging.debug(f"Context for {sid}: {context[:100]}...")  # log first 100 characters of context for readability
+            logging.debug(f"Caption for {sid}: {caption[:100]}...")  # log first 100 characters of caption
+        
+        try:
+            # Segment the context and extract NER
+            segmented_context = segment_text(context, vncore)
+            cap_ner = extract_entities(caption, vncore)
+            ctx_ner = extract_entities(context, vncore)
+            
+            if idx % 100 == 0:
+                # Log segmentation and NER results
+                logging.debug(f"Segmented context for {sid}: {segmented_context[:100]}...")  # log first 100 characters of segmented context
+                logging.debug(f"Entities in caption for {sid}: {cap_ner}")
+                logging.debug(f"Entities in context for {sid}: {ctx_ner}")
+            
+            items_to_process.append((sid, item, segmented_context, cap_ner, ctx_ner))
+        
+        except Exception as e:
+            # Log any exceptions or errors during the processing of an item
+            logging.error(f"Error processing item {sid}: {e}")
+            continue
 
     # Load existing HDF5 data if available
     if os.path.exists(hdf5_path):
@@ -432,6 +470,7 @@ def convert_items(items: Dict[str, dict], split: str, models: dict, output_dir: 
     return samples, articles, objects
 
 def load_split(path: str) -> Dict[str, dict]:
+    logging.info(f"Loading {path}")
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -449,20 +488,21 @@ def save_checkpoint(samples: List[dict], articles: Dict[str, dict], objects: Lis
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Create ViWiki dataset files")
-    parser.add_argument("data_dir", nargs="?", default="/data/npl/ICEK/Wikipedia/content/ver4", help="Directory with train/val/test JSON")
-    parser.add_argument("output_dir", nargs="?", default="/data/npl/ICEK/TnT/dataset/content", help="Directory to write converted files")
+    parser.add_argument("data_dir", nargs="?", default="/data2/npl/ICEK/Wikipedia/content/ver4", help="Directory with train/val/test JSON")
+    parser.add_argument("output_dir", nargs="?", default="/data2/npl/ICEK/TnT/dataset/content", help="Directory to write converted files")
     parser.add_argument("--image-out", default=None, dest="image_out", help="Optional directory to copy images")
-    parser.add_argument("--vncorenlp", default="/data/npl/ICEK/VnCoreNLP", help="Path to VnCoreNLP jar file")
+    parser.add_argument("--vncorenlp", default="/data2/npl/ICEK/VnCoreNLP", help="Path to VnCoreNLP jar file")
     parser.add_argument("--checkpoint-interval", type=int, default=100, help="Save checkpoint every N items")
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size for processing")
-    parser.add_argument("--num-workers", type=int, default=4, help="Number of worker processes")
+    parser.add_argument("--num-workers", type=int, default=1, help="Number of worker processes")
     args = parser.parse_args()
     logging.info("Loaded arguments")
     os.makedirs(args.output_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     models = setup_models(device, args.vncorenlp)
     models["vncorenlp_path"] = args.vncorenlp
-    for split in ["train", "val", "test"]:
+    for split in ["val", "test", "train"]:
         split_data = load_split(os.path.join(args.data_dir, f"{split}.json"))
+        logging.info("Loaded data")
         samples, articles, objects = convert_items(split_data, split, models, args.output_dir, args.image_out, args.checkpoint_interval, args.batch_size, args.num_workers)
         save_checkpoint(samples, articles, objects, args.output_dir, split)
