@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: tell
+Version: 0.1
+Summary: News captioning experiments
+Home-page: https://github.com/alasdairtran/tell
+Author: Alasdair Tran
+Author-email: alasdair.tran@anu.edu.au
+License: MIT
+Dynamic: author
+Dynamic: author-email
+Dynamic: home-page
+Dynamic: license
+Dynamic: summary

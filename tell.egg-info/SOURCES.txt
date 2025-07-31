@@ -1,0 +1,9 @@
+README.md
+setup.py
+bin/tell
+tell/__init__.py
+tell.egg-info/PKG-INFO
+tell.egg-info/SOURCES.txt
+tell.egg-info/dependency_links.txt
+tell.egg-info/not-zip-safe
+tell.egg-info/top_level.txt

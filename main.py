@@ -723,9 +723,9 @@ def evaluate_model(model, config):
 if __name__ == "__main__":
     # Configuration (parameters from paper and config.yaml)
     config = {
-        "data_dir": "/data/npl/ICEK/Wikipedia/content/ver4",
-        "output_dir": "/data/npl/ICEK/TnT/output",
-        "vncorenlp_path": "/data/npl/ICEK/VnCoreNLP",
+        "data_dir": "/data2/npl/ICEK/Wikipedia/content/ver4",
+        "output_dir": "/data2/npl/ICEK/TnT/output",
+        "vncorenlp_path": "/data2/npl/ICEK/VnCoreNLP",
         "vocab_size": 64001,  # From phoBERT-base tokenizer
         "embed_dim": 1024,    # Hidden size
         "batch_size": 8,
