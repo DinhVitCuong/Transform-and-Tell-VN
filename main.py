@@ -266,88 +266,6 @@ def pad_and_collate(batch):
 #         "image_path": img_path,
 #     }
 
-# class NewsCaptionDataset(Dataset):
-#     def __init__(self, data_dir, split, models, max_length=512):
-#         self.models = models
-#         self.split = split
-#         self.max_length = max_length
-#         self.preprocess = transforms.Compose([
-#             transforms.Resize((256, 256)),
-#             transforms.ToTensor(),
-#             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-#         ])
-#         self.data_pt_dir = "/data/npl/ICEK/TnT/dataset/content"
-#         with open(os.path.join(data_dir, f"{split}.json"), "r") as f:
-#             self.data = json.load(f)
-#         self.keys = sorted([d["_id"] for d in self.data], key=lambda x: int(x))
-#         self.tokenizer = models["tokenizer"]
-#         self.hdf5_path = os.path.join(self.data_pt_dir, f"{split}_features.h5")
-#         self.hdf5_file = h5py.File(self.hdf5_path, "r", swmr=True)  # Single-Writer Multiple-Reader mode
-
-#     def __len__(self):
-#         return len(self.keys)
-
-#     def __getitem__(self, idx):
-#         key = self.keys[idx]
-#         item = next(d for d in self.data if d["_id"] == key)
-#         img_path = item["image_path"]
-#         device = self.models["device"]
-
-#         try:
-#             group = self.hdf5_file[key]
-#             img_tensor = torch.tensor(group["image_feature"][:], device=device, dtype=torch.float)
-#             face_info = json.loads(group["face_info"][()])
-#             obj_tensor = torch.tensor(group["object_features"][:], device=device, dtype=torch.float)
-#             art_embed = torch.tensor(group["article_embed"][:], device=device, dtype=torch.float)
-#             cap_ner = json.loads(group["caption_ner"][()])
-#             ctx_ner = json.loads(group["context_ner"][()])
-
-#             contexts = {
-#                 "image": img_tensor,
-#                 "image_mask": torch.zeros(img_tensor.size(0), dtype=torch.bool, device=device),
-#                 "faces": torch.tensor(face_info["embeddings"], device=device, dtype=torch.float) if face_info["n_faces"] > 0 else torch.zeros((0, 512), device=device, dtype=torch.float),
-#                 "faces_mask": torch.ones((face_info["n_faces"],), dtype=torch.bool, device=device) if face_info["n_faces"] == 0 else torch.isnan(torch.tensor(face_info["embeddings"], device=device)).any(dim=-1),
-#                 "obj": obj_tensor,
-#                 "obj_mask": torch.ones((obj_tensor.size(0),), dtype=torch.bool, device=device) if obj_tensor.size(0) == 0 else torch.isnan(obj_tensor).any(dim=-1),
-#                 "article": art_embed,
-#                 "article_mask": torch.zeros(512, device=device, dtype=torch.bool),
-#             }
-#             contexts["article_mask"][min(512, contexts["article"].size(0)):] = True
-#         except Exception as e:
-#             logging.error(f"Error loading features for {key}: {e}")
-#             # Return dummy data to skip problematic sample
-#             contexts = {
-#                 "image": torch.zeros((49, 2048), device=device, dtype=torch.float),
-#                 "image_mask": torch.ones((49,), dtype=torch.bool, device=device),
-#                 "faces": torch.zeros((0, 512), device=device, dtype=torch.float),
-#                 "faces_mask": torch.ones((0,), dtype=torch.bool, device=device),
-#                 "obj": torch.zeros((1, 2048), device=device, dtype=torch.float),
-#                 "obj_mask": torch.ones((1,), dtype=torch.bool, device=device),
-#                 "article": torch.zeros((512, 1024), device=device, dtype=torch.float),
-#                 "article_mask": torch.ones((512,), dtype=torch.bool, device=device),
-#             }
-#             cap_ner = {}
-#             ctx_ner = {}
-
-#         caption = item.get("caption", "")
-#         caption_ids = self.tokenizer.encode(
-#             caption,
-#             return_tensors="pt",
-#             truncation=True,
-#             max_length=self.max_length
-#         )[0]
-
-#         return {
-#             "image": contexts["image"],
-#             "contexts": contexts,
-#             "caption_ids": caption_ids,
-#             "caption": caption,
-#             "image_path": img_path,
-#         }
-
-#     def __del__(self):
-#         self.hdf5_file.close()
-
 def _h5_worker_init_fn(_):
     # Each worker gets its own H5 handle
     worker_info = torch.utils.data.get_worker_info()
@@ -359,185 +277,199 @@ def _h5_worker_init_fn(_):
 
 class NewsCaptionDataset(Dataset):
     """
-    Reads features from a single uncompressed HDF5 file:
-      {data_pt_dir}/{split}_features.h5
+    Expects:
+      data_dir/
+        train.json, val.json, test.json   # metadata (captions, image_path, _id, ...)
+      features_dir/  (defaults to data_dir if not given)
+        {split}_h5_index.json             # {"<id>": {"shard":"{split}_feat_000.h5","group":"/samples/<id>"}}
+        {split}_feat_000.h5, {split}_feat_001.h5, ...
 
-    Supports two layouts:
-    A) Per-sample datasets:
-        /<id>/image_feature, /<id>/object_features, /<id>/article_embed,
-        /<id>/face_embeddings (optional), attr face_n_faces (optional),
-        /<id>/ner (JSON str)  OR  /<id>/caption_ner + /<id>/context_ner
-    B) Your earlier variant with a single JSON dataset:
-        /<id>/face_info (JSON with {"n_faces": int, "embeddings": ...})
+    H5 group per sample contains (uncompressed is fine):
+      image_feature (Timg, Dimg)
+      object_features (Kobj, Dobj)
+      article_embed (L, Dart)
+      face_embeddings (Nf, Df)           [optional]
+      face_detect_probs (Nf,)            [optional]
+      attr: face_n_faces                 [optional]
+      ner: JSON string with {caption_ner, context_ner} [optional]
     """
-    def __init__(self, data_dir, split, models, max_length=512, data_pt_dir="/data/npl/ICEK/TnT/dataset/content"):
-        self.models = models
-        self.tokenizer = models["tokenizer"]
-        self.split = split
-        self.max_length = max_length
-        self.data_pt_dir = data_pt_dir
+    def __init__(self, data_dir, split, models, features_dir=None, max_length=512):
+        super().__init__()
+        self.data_dir     = data_dir
+        self.features_dir = features_dir or data_dir
+        self.split        = split
+        self.models       = models
+        self.tokenizer    = models.get("tokenizer", None)
+        self.max_length   = max_length
 
-        # JSON list with {"_id": "...", "image_path": "...", "caption": ...}
-        with open(os.path.join(data_dir, f"{split}.json"), "r", encoding="utf-8") as f:
-            self.data = json.load(f)
-        # stable key order
-        self.keys = sorted([str(d["_id"]) for d in self.data], key=lambda x: int(x))
+        # ---- load metadata list (samples) ----
+        meta_path = os.path.join(self.data_dir, f"{split}.json")
+        with open(meta_path, "r", encoding="utf-8") as f:
+            self.meta = json.load(f)
+        # Map id -> record for O(1) access
+        self.ids = [str(m["_id"]) for m in self.meta]
+        # Stable order (numeric if possible)
+        try:
+            self.ids = sorted(self.ids, key=lambda x: int(x))
+        except Exception:
+            self.ids = sorted(self.ids)
+        self._meta_by_id = {str(m["_id"]): m for m in self.meta}
 
-        # H5 file is opened lazily (works with num_workers > 0)
-        self.h5_path = os.path.join(self.data_pt_dir, f"{split}_features.h5")
-        self._h5 = None  # opened on first __getitem__
+        # ---- load H5 index ----
+        idx_path = os.path.join(self.features_dir, f"{split}_h5_index.json")
+        with open(idx_path, "r", encoding="utf-8") as f:
+            self._h5_index = json.load(f)
 
-    def _ensure_open(self):
-        if self._h5 is None:
-            # readers don’t need SWMR; libver="latest" is fine
-            self._h5 = h5py.File(self.h5_path, "r", libver="latest")
+        # per-worker shard handles
+        self._open_files = {}  # shard_basename -> h5py.File
 
     def __len__(self):
-        return len(self.keys)
+        return len(self.ids)
 
-    def _get_group(self, key: str):
-        """Support group either at root '/<id>' or '/samples/<id>'."""
-        if f"/samples/{key}" in self._h5:
-            return self._h5[f"/samples/{key}"]
-        return self._h5[key]  # raises KeyError if missing
+    # ---------- H5 helpers ----------
+    def _open_shard(self, shard_basename: str):
+        f = self._open_files.get(shard_basename)
+        if f is None:
+            f = h5py.File(os.path.join(self.features_dir, shard_basename), "r", libver="latest")
+            self._open_files[shard_basename] = f
+        return f
+
+    def _get_group(self, sample_id: str):
+        info = self._h5_index[sample_id]  # {"shard": "..._feat_XXX.h5", "group": "/samples/<id>"}
+        return self._open_shard(info["shard"])[info["group"]]
+
+    # ---------- small utils ----------
+    @staticmethod
+    def _ensure_float32(arr):
+        # Accept numpy or torch; return numpy float32 contiguous
+        if arr is None:
+            return np.zeros((0,), dtype=np.float32)
+        if isinstance(arr, torch.Tensor):
+            arr = arr.detach().cpu().numpy()
+        return np.ascontiguousarray(arr, dtype=np.float32)
+
+    @staticmethod
+    def _decode_json_dataset(dset):
+        raw = dset[()]
+        if isinstance(raw, (bytes, bytearray, np.bytes_)):
+            raw = raw.decode("utf-8", errors="ignore")
+        try:
+            return json.loads(raw)
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _pad_article(article_np: np.ndarray, target_len=512):
+        """Pad/trim article to target_len along dim 0; return (np.float32 [L,D], mask [L], torch)."""
+        L, D = article_np.shape if article_np.ndim == 2 else (0, 0)
+        if L >= target_len:
+            arr = article_np[:target_len]
+            mask = torch.zeros((target_len,), dtype=torch.bool)
+        else:
+            arr = np.zeros((target_len, D), dtype=np.float32)
+            if L > 0:
+                arr[:L] = article_np
+            mask = torch.zeros((target_len,), dtype=torch.bool)
+            mask[L:] = True
+        return arr, mask
 
     def __getitem__(self, idx):
-        self._ensure_open()
-        key = self.keys[idx]
-        # Lookup the small JSON record (caption, image_path, etc.)
-        # (Assumes unique _id)
-        # Faster than scanning every time: store a dict if you like.
-        rec = next(d for d in self.data if str(d["_id"]) == key)
-        img_path = rec.get("image_path", "")
-        caption = rec.get("caption", "")
+        sid = self.ids[idx]
+        rec = self._meta_by_id.get(sid, {})
+        caption   = rec.get("caption", "")
+        image_path = rec.get("image_path", "")
 
-        # --- Read H5 features (CPU tensors; move to device in collate/loop) ---
+        # ---- read H5 features ----
         try:
-            g = self._get_group(key)
+            g = self._get_group(sid)
 
-            # Required
-            image_feature = g["image_feature"][()]             # (49, 2048) typically
-            object_features = g["object_features"][()]         # (K, 2048)
-            article_embed = g["article_embed"][()]             # (L, 1024)
+            img = self._ensure_float32(g["image_feature"][()])
+            obj = self._ensure_float32(g["object_features"][()])
+            art = self._ensure_float32(g["article_embed"][()])
 
-            # Faces: allow either face_embeddings (+ attr) OR face_info JSON
             if "face_embeddings" in g:
-                face_embeds = g["face_embeddings"][()]
-                n_faces = int(g.attrs.get("face_n_faces", face_embeds.shape[0]))
-            elif "face_info" in g:
-                face_info = g["face_info"][()]
-                if isinstance(face_info, (bytes, bytearray, np.bytes_)):
-                    face_info = face_info.decode("utf-8")
-                face_info = json.loads(face_info)
-                face_embeds = np.asarray(face_info.get("embeddings", []), dtype=np.float32)
-                n_faces = int(face_info.get("n_faces", len(face_embeds)))
+                faces = self._ensure_float32(g["face_embeddings"][()])
             else:
-                face_embeds = np.zeros((0, 512), dtype=np.float32)
-                n_faces = 0
+                faces = np.zeros((0, 512), dtype=np.float32)
 
-            # NER: either ner(JSON) or separate caption_ner/context_ner
+            # Optional NER (unused here, but handy to keep)
             caption_ner, context_ner = {}, {}
             if "ner" in g:
-                ner_raw = g["ner"][()]
-                if isinstance(ner_raw, (bytes, bytearray, np.bytes_)):
-                    ner_raw = ner_raw.decode("utf-8")
-                try:
-                    ner_obj = json.loads(ner_raw)
-                    caption_ner = ner_obj.get("caption_ner", {})
-                    context_ner = ner_obj.get("context_ner", {})
-                except Exception:
-                    pass
-            else:
-                if "caption_ner" in g:
-                    cap_raw = g["caption_ner"][()]
-                    if isinstance(cap_raw, (bytes, bytearray, np.bytes_)):
-                        cap_raw = cap_raw.decode("utf-8")
-                    try:
-                        caption_ner = json.loads(cap_raw)
-                    except Exception:
-                        caption_ner = {}
-                if "context_ner" in g:
-                    ctx_raw = g["context_ner"][()]
-                    if isinstance(ctx_raw, (bytes, bytearray, np.bytes_)):
-                        ctx_raw = ctx_raw.decode("utf-8")
-                    try:
-                        context_ner = json.loads(ctx_raw)
-                    except Exception:
-                        context_ner = {}
+                ner_obj = self._decode_json_dataset(g["ner"])
+                caption_ner = ner_obj.get("caption_ner", {})
+                context_ner = ner_obj.get("context_ner", {})
 
-            # Build CPU tensors
-            img_tensor = torch.as_tensor(image_feature, dtype=torch.float32)
-            obj_tensor = torch.as_tensor(object_features, dtype=torch.float32)
-            art_embed = torch.as_tensor(article_embed, dtype=torch.float32)
+            # Convert to tensors
+            image_tensor = torch.as_tensor(img, dtype=torch.float32)            # (Timg, Dimg)
+            obj_tensor   = torch.as_tensor(obj, dtype=torch.float32)            # (Kobj, Dobj)
+            faces_tensor = torch.as_tensor(faces, dtype=torch.float32)          # (Nf, Df)
+            art_np, art_mask = self._pad_article(art, target_len=512)
+            art_tensor  = torch.as_tensor(art_np, dtype=torch.float32)
 
-            if n_faces > 0 and len(face_embeds) > 0:
-                faces = torch.as_tensor(face_embeds, dtype=torch.float32)
-                faces_mask = torch.isnan(faces).any(dim=-1)  # True where invalid
-            else:
-                faces = torch.zeros((0, 512), dtype=torch.float32)
-                faces_mask = torch.ones((0,), dtype=torch.bool)
-
-            # Masks: False for valid tokens, True for padding/empty
-            image_mask = torch.zeros((img_tensor.size(0),), dtype=torch.bool)
-            obj_mask = torch.ones((obj_tensor.size(0),), dtype=torch.bool) if obj_tensor.size(0) == 0 else torch.isnan(obj_tensor).any(dim=-1)
-
-            article_len = art_embed.size(0)
-            article_mask = torch.zeros((max(512, article_len),), dtype=torch.bool)
-            if article_len < 512:
-                # mark padded tail
-                article_mask[article_len:512] = True
+            # Masks
+            image_mask = torch.zeros((image_tensor.size(0),), dtype=torch.bool)
+            obj_mask   = torch.zeros((obj_tensor.size(0),), dtype=torch.bool) if obj_tensor.size(0) > 0 \
+                         else torch.ones((0,), dtype=torch.bool)
+            faces_mask = torch.zeros((faces_tensor.size(0),), dtype=torch.bool) if faces_tensor.size(0) > 0 \
+                         else torch.ones((0,), dtype=torch.bool)
 
             contexts = {
-                "image": img_tensor,
+                "image": image_tensor,
                 "image_mask": image_mask,
-                "faces": faces,
+                "faces": faces_tensor,
                 "faces_mask": faces_mask,
                 "obj": obj_tensor,
                 "obj_mask": obj_mask,
-                "article": art_embed,
-                "article_mask": article_mask[:512],  # ensure 512
+                "article": art_tensor,
+                "article_mask": art_mask,
+                # Optionally pass NER through if you need it later
+                # "caption_ner": caption_ner,
+                # "context_ner": context_ner,
             }
 
         except Exception as e:
-            logging.error(f"[{self.split}] H5 load error for id={key}: {e}")
-            # Safe dummies if a sample is broken
+            logging.error(f"[{self.split}] H5 read error for id={sid}: {e}")
+            # Safe fallbacks
             contexts = {
                 "image": torch.zeros((49, 2048), dtype=torch.float32),
                 "image_mask": torch.ones((49,), dtype=torch.bool),
                 "faces": torch.zeros((0, 512), dtype=torch.float32),
                 "faces_mask": torch.ones((0,), dtype=torch.bool),
-                "obj": torch.zeros((1, 2048), dtype=torch.float32),
-                "obj_mask": torch.ones((1,), dtype=torch.bool),
+                "obj": torch.zeros((0, 2048), dtype=torch.float32),
+                "obj_mask": torch.ones((0,), dtype=torch.bool),
                 "article": torch.zeros((512, 1024), dtype=torch.float32),
                 "article_mask": torch.ones((512,), dtype=torch.bool),
             }
 
-        # Tokenize (CPU tensors; moved to device later)
-        caption_ids = self.tokenizer.encode(
-            caption,
-            return_tensors="pt",
-            truncation=True,
-            max_length=self.max_length
-        )[0]
+        # Tokenize caption (stay on CPU; move to device later)
+        if self.tokenizer is None:
+            # Minimal fallback tokenizer to keep pipeline running
+            cap_len = min(len(caption.split()), self.max_length)
+            caption_ids = torch.randint(low=5, high=30000, size=(cap_len,), dtype=torch.long)
+        else:
+            caption_ids = self.tokenizer.encode(
+                caption, return_tensors="pt", truncation=True, max_length=self.max_length
+            )[0]
 
         return {
-            "image": contexts["image"],
+            "id": sid,
+            "image": contexts["image"],  # convenience alias
             "contexts": contexts,
             "caption_ids": caption_ids,
             "caption": caption,
-            "image_path": img_path,
+            "image_path": image_path,
         }
 
+    # ---- cleanup ----
     def close(self):
-        if getattr(self, "_h5", None) is not None:
-            try:
-                self._h5.close()
-            except Exception:
-                pass
-            self._h5 = None
+        for f in self._open_files.values():
+            try: f.close()
+            except Exception: pass
+        self._open_files.clear()
 
     def __del__(self):
         self.close()
+
 
 class TransformAndTell(nn.Module):
     def __init__(self, vocab_size, embedder, decoder_params):
@@ -613,25 +545,7 @@ def train_model(config):
     """Training pipeline with early stopping"""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     models = setup_models(device, config["vncorenlp_path"])
-    
-    # Initialize datasets and dataloaders
-    train_dataset = NewsCaptionDataset(config["data_dir"], "train", models)
-    val_dataset = NewsCaptionDataset(config["data_dir"], "val", models)
-    
-    # train_loader = DataLoader(
-    #     train_dataset,
-    #     batch_size=config["batch_size"],
-    #     shuffle=True,
-    #     num_workers=config["num_workers"],
-    #     collate_fn=pad_and_collate  
-    # )
-    # val_loader = DataLoader(
-    #     val_dataset,
-    #     batch_size=config["batch_size"],
-    #     shuffle=False,
-    #     num_workers=config["num_workers"],
-    #     collate_fn=pad_and_collate
-    # )
+
     train_loader = DataLoader(
         NewsCaptionDataset(config["data_dir"], "train", models),
         batch_size=config["batch_size"],
@@ -817,7 +731,6 @@ def evaluate_model(model, config):
     models = setup_models(device, config["vncorenlp_path"])
     
     # Load validation dataset
-    test_dataset = NewsCaptionDataset(config["data_dir"], "test", models)
     test_loader = DataLoader(
         NewsCaptionDataset(config["data_dir"], "test", models),
         batch_size=config["batch_size"],
@@ -937,7 +850,7 @@ def evaluate_model(model, config):
 if __name__ == "__main__":
     # Configuration (parameters from paper and config.yaml)
     config = {
-        "data_dir": "/data2/npl/ICEK/Wikipedia/content/ver4",
+        "data_dir": "/data2/npl/ICEK/TnT/dataset/content",
         "output_dir": "/data2/npl/ICEK/TnT/output",
         "vncorenlp_path": "/data2/npl/ICEK/VnCoreNLP",
         "vocab_size": 64001,  # From phoBERT-base tokenizer

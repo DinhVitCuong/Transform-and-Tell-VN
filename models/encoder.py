@@ -438,16 +438,11 @@ def process_item(sid: str, item: dict, segmented_context: str, cap_ner: Dict[str
     mtcnn = models["mtcnn"]; facenet = models["facenet"]; resnet = models["resnet"]
     resnet_object = models["resnet_object"]; yolo = models["yolo"]; preprocess = models["preprocess"]
     embedder = models["embedder"]; device = models["device"]
-    print(f"Done load models")
 
     face_info = detect_faces(image, mtcnn, facenet, device)
-    print(f"Done face")
     obj_feats = detect_objects(img_path, yolo, resnet_object, preprocess, device)
-    print(f"Done obj")
     img_feat = np.array(image_feature(image, resnet, preprocess, device), dtype=np.float32)
-    print(f"Done img")
     art_embed = embedder([item.get("caption", "")], [segmented_context])[0].cpu().numpy()
-    print(f"Done art")
 
     features = {
         "image_feature": img_feat,
@@ -656,7 +651,11 @@ if __name__ == "__main__":
         split_data = load_split(os.path.join(args.data_dir, f"{split}.json"))
         logging.info("Loaded data")
         samples, articles, objects = convert_items(split_data, split, models, args.output_dir, args.image_out, args.checkpoint_interval)
+        save_checkpoint(samples, articles, objects, args.output_dir, split)
+        logging.info(f"[{split}] saved: samples={len(samples)}, articles={len(articles)}, objects={len(objects)}")
     # for split in ["train", "val", "test"]:
     #     split_data = load_split(os.path.join(args.data_dir, f"{split}.json"))
+    #     logging.info(f"Loaded data: {split}")
     #     samples, articles, objects = convert_items(split_data, split, models, args.output_dir, args.image_out, args.checkpoint_interval)
     #     save_checkpoint(samples, articles, objects, args.output_dir, split)
+    #     logging.info(f"[{split}] saved: samples={len(samples)}, articles={len(articles)}, objects={len(objects)}")
