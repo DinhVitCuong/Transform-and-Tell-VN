@@ -384,12 +384,17 @@ def load_split(path: str) -> Dict[str, dict]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
+def _write_json_minified(path: str, obj):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        # separators removes all extra spaces, indent=None avoids newlines
+        json.dump(obj, f, ensure_ascii=False, separators=(",", ":"), indent=None)
+    os.replace(tmp, path)
 
 def save_checkpoint(samples: List[dict], articles: Dict[str, dict], objects: List[dict], out_dir: str, split: str):
     with open(os.path.join(out_dir, f"{split}.json"), "w", encoding="utf-8") as f:
         json.dump(samples, f, ensure_ascii=False, indent=2)
-    with open(os.path.join(out_dir, f"articles_{split}.json"), "w", encoding="utf-8") as f:
-        json.dump(articles, f, ensure_ascii=False, indent=2)
+    _write_json_minified(os.path.join(output_dir, f"articles_{split}.json"), articles_all)
     with open(os.path.join(out_dir, f"objects_{split}.json"), "w", encoding="utf-8") as f:
         json.dump(objects, f, ensure_ascii=False, indent=2)
 
@@ -417,7 +422,7 @@ def process_item(sid: str, item: dict, segmented_context: str, cap_ner: Dict[str
     # Prepare image path; optionally copy to image_out
     img_id = item["image_path"].split("images/")[-1]
     img_path = f"/data2/npl/ICEK/Wikipedia/images_resized/{img_id}"
-    print(f"Image Path: {img_path}")
+    # print(f"Image Path: {img_path}")
     if image_out:
         os.makedirs(image_out, exist_ok=True)
         dst = os.path.join(image_out, f"{sample_id}.jpg")
@@ -543,6 +548,84 @@ def _dump_index_json(output_dir: str, split: str, index: dict):
 #             print(f"ERROR PROCESSING ITEM No.{sid}")
 #     return samples_all, articles_all, objects_all
 
+# def convert_items(items: Dict[str, dict], split: str, models: dict, output_dir: str,
+#                   image_out: str = None, checkpoint_interval: int = 2000):
+#     samples_all, articles_all, objects_all = [], {}, []
+#     vncore = models["vncore"]
+
+#     # --- shard init ---
+#     total = len(items)
+#     SHARD_SIZE = 2000
+#     need_shard = total >= 1
+#     shard_size = SHARD_SIZE if need_shard else max(total, 1)
+
+#     shard_idx, in_shard, processed = 0, 0, 0
+#     h5f, h5root, shard_path = _open_new_shard(output_dir, split, shard_idx)  # open NEW file
+#     index = {}   # sample_id -> {"shard": basename, "group": f"/samples/{sample_id}"}
+
+#     logging.info(f"[{split}] streaming encode+write: {total} items; shard_size={shard_size}")
+
+#     # --- STREAM: do NER + process + write, item-by-item ---
+#     for sid, item in tqdm(list(items.items()), desc=f"Encode+Save {split}"):
+#         try:
+#             # inline text preprocess (instead of pre-building a huge list)
+#             context = " ".join(item.get("context", []))
+#             caption = item.get("caption", "")
+#             segmented_context = segment_text(context, vncore)
+#             cap_ner = extract_entities(caption, vncore)
+#             ctx_ner = extract_entities(context, vncore)
+
+#             sample_id, features, sample, article, object_data = process_item(
+#                 sid, item, segmented_context, cap_ner, ctx_ner, models, image_out, split
+#             )
+#             if features is None:
+#                 continue
+
+#             # write immediately
+#             _write_sample_to_h5(h5root, sample_id, features)
+#             index[sample_id] = {
+#                 "shard": os.path.basename(shard_path),
+#                 "group": f"/samples/{sample_id}"
+#             }
+
+#             # light metas
+#             samples_all.append(sample)
+#             articles_all[sample_id] = article
+#             objects_all.append({
+#                 "_id": sample_id,
+#                 "h5_shard": os.path.basename(shard_path),
+#                 "group": f"/samples/{sample_id}",
+#                 "n_objects": int(np.array(features["object_features"]).shape[0])
+#             })
+
+#             in_shard += 1
+#             processed += 1
+
+#             # rotate shard when full
+#             if in_shard >= shard_size and processed < total:
+#                 h5f.flush(); h5f.close()
+#                 shard_idx += 1
+#                 in_shard = 0
+#                 h5f, h5root, shard_path = _open_new_shard(output_dir, split, shard_idx)
+#                 logging.info(f"[{split}] rotated to shard {shard_idx:03d}")
+
+#             # light checkpoint (index only) every shard or big chunk
+#             if processed % checkpoint_interval == 0:
+#                 _dump_index_json(output_dir, split, index)
+
+#         except Exception as e:
+#             logging.exception(f"[{split}] ERROR PROCESSING ITEM {sid}: {e}")
+#             continue
+
+#     # finalize
+#     try:
+#         h5f.flush(); h5f.close()
+#     except Exception:
+#         pass
+#     _dump_index_json(output_dir, split, index)
+#     return samples_all, articles_all, objects_all
+
+
 def convert_items(items: Dict[str, dict], split: str, models: dict, output_dir: str,
                   image_out: str = None, checkpoint_interval: int = 100):
     samples_all, articles_all, objects_all = [], {}, []
@@ -575,7 +658,7 @@ def convert_items(items: Dict[str, dict], split: str, models: dict, output_dir: 
     in_shard = 0
     h5f, h5root, shard_path = _open_new_shard(output_dir, split, shard_idx)
     index = {}   # sample_id -> {"shard": basename, "group": f"/samples/{sample_id}"}
-
+    logging.info(f"COMPLETE INIT FIRST H5 SHARD {split}")
     # 3) Iterate and write
     processed = 0
     for sid, item, segmented_context, cap_ner, ctx_ner in tqdm(items_to_process, desc=f"Encode+Save {split}"):
@@ -650,12 +733,15 @@ if __name__ == "__main__":
     for split in ["demo10"]:  # DEBUG
         split_data = load_split(os.path.join(args.data_dir, f"{split}.json"))
         logging.info("Loaded data")
+        print("Loaded_data")
         samples, articles, objects = convert_items(split_data, split, models, args.output_dir, args.image_out, args.checkpoint_interval)
         save_checkpoint(samples, articles, objects, args.output_dir, split)
         logging.info(f"[{split}] saved: samples={len(samples)}, articles={len(articles)}, objects={len(objects)}")
     # for split in ["train", "val", "test"]:
     #     split_data = load_split(os.path.join(args.data_dir, f"{split}.json"))
     #     logging.info(f"Loaded data: {split}")
+        # print(f"Loaded data: {split}")
     #     samples, articles, objects = convert_items(split_data, split, models, args.output_dir, args.image_out, args.checkpoint_interval)
     #     save_checkpoint(samples, articles, objects, args.output_dir, split)
     #     logging.info(f"[{split}] saved: samples={len(samples)}, articles={len(articles)}, objects={len(objects)}")
+        # print(f"[{split}] saved: samples={len(samples)}, articles={len(articles)}, objects={len(objects)}")

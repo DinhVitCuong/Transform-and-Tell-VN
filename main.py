@@ -721,7 +721,7 @@ def train_model(config):
             best_val_loss = avg_val_loss
             torch.save(model.state_dict(), 
                        os.path.join(config["output_dir"], "best_model.pth"))
-            print("  Saved new best model")
+            print("Saved new best model")
     
     return model
 
