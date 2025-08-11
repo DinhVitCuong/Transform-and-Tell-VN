@@ -1,0 +1,68 @@
+[
+  {
+    "_id": "0",
+    "h5_shard": "demo10_feat_000.h5",
+    "group": "/samples/0",
+    "n_objects": 1
+  },
+  {
+    "_id": "1",
+    "h5_shard": "demo10_feat_000.h5",
+    "group": "/samples/1",
+    "n_objects": 1
+  },
+  {
+    "_id": "2",
+    "h5_shard": "demo10_feat_000.h5",
+    "group": "/samples/2",
+    "n_objects": 1
+  },
+  {
+    "_id": "3",
+    "h5_shard": "demo10_feat_000.h5",
+    "group": "/samples/3",
+    "n_objects": 1
+  },
+  {
+    "_id": "4",
+    "h5_shard": "demo10_feat_000.h5",
+    "group": "/samples/4",
+    "n_objects": 1
+  },
+  {
+    "_id": "5",
+    "h5_shard": "demo10_feat_000.h5",
+    "group": "/samples/5",
+    "n_objects": 1
+  },
+  {
+    "_id": "6",
+    "h5_shard": "demo10_feat_000.h5",
+    "group": "/samples/6",
+    "n_objects": 6
+  },
+  {
+    "_id": "7",
+    "h5_shard": "demo10_feat_000.h5",
+    "group": "/samples/7",
+    "n_objects": 1
+  },
+  {
+    "_id": "8",
+    "h5_shard": "demo10_feat_000.h5",
+    "group": "/samples/8",
+    "n_objects": 11
+  },
+  {
+    "_id": "9",
+    "h5_shard": "demo10_feat_000.h5",
+    "group": "/samples/9",
+    "n_objects": 7
+  },
+  {
+    "_id": "10",
+    "h5_shard": "demo10_feat_000.h5",
+    "group": "/samples/10",
+    "n_objects": 3
+  }
+]

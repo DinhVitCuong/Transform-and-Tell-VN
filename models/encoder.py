@@ -394,7 +394,7 @@ def _write_json_minified(path: str, obj):
 def save_checkpoint(samples: List[dict], articles: Dict[str, dict], objects: List[dict], out_dir: str, split: str):
     with open(os.path.join(out_dir, f"{split}.json"), "w", encoding="utf-8") as f:
         json.dump(samples, f, ensure_ascii=False, indent=2)
-    _write_json_minified(os.path.join(output_dir, f"articles_{split}.json"), articles_all)
+    _write_json_minified(os.path.join(out_dir, f"articles_{split}.json"), articles)
     with open(os.path.join(out_dir, f"objects_{split}.json"), "w", encoding="utf-8") as f:
         json.dump(objects, f, ensure_ascii=False, indent=2)
 
