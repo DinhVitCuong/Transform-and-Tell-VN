@@ -75,9 +75,7 @@ def pad_and_collate(batch):
     from torch.nn.utils.rnn import pad_sequence
 
     def pad_context_list(tensors, padding_value=0.0):
-        max_len = max(t.size(0) for t in tensors)
-        padded = torch.stack([torch.nn.functional.pad(t, (0, 0, 0, max_len - t.size(0)), value=padding_value) for t in tensors])
-        return padded
+        return pad_sequence(tensors, batch_first=True, padding_value=padding_value)
 
     images = [item["image"] for item in batch]
     captions = [item["caption"] for item in batch]
@@ -103,6 +101,39 @@ def pad_and_collate(batch):
         "contexts": contexts,
         "image_path": image_paths,
     }
+
+# def pad_and_collate(batch):
+#     from torch.nn.utils.rnn import pad_sequence
+
+#     def pad_context_list(tensors, padding_value=0.0):
+#         max_len = max(t.size(0) for t in tensors)
+#         padded = torch.stack([torch.nn.functional.pad(t, (0, 0, 0, max_len - t.size(0)), value=padding_value) for t in tensors])
+#         return padded
+
+#     images = [item["image"] for item in batch]
+#     captions = [item["caption"] for item in batch]
+#     caption_ids = [item["caption_ids"] for item in batch]
+#     image_paths = [item["image_path"] for item in batch]
+
+#     contexts = {
+#         "image": pad_context_list([item["contexts"]["image"] for item in batch]),
+#         "image_mask": pad_context_list([item["contexts"]["image_mask"] for item in batch], padding_value=True),
+#         "faces": pad_context_list([item["contexts"]["faces"] for item in batch]),
+#         "faces_mask": pad_context_list([item["contexts"]["faces_mask"] for item in batch], padding_value=True),
+#         "obj": pad_context_list([item["contexts"]["obj"] for item in batch]),
+#         "obj_mask": pad_context_list([item["contexts"]["obj_mask"] for item in batch], padding_value=True),
+#         "article": pad_context_list([item["contexts"]["article"] for item in batch]),
+#         "article_mask": pad_context_list([item["contexts"]["article_mask"] for item in batch], padding_value=True),
+#     }
+
+#     caption_ids = pad_sequence(caption_ids, batch_first=True, padding_value=0)
+#     return {
+#         "image": torch.stack(images),
+#         "caption": captions,
+#         "caption_ids": caption_ids,
+#         "contexts": contexts,
+#         "image_path": image_paths,
+#     }
 
 # class NewsCaptionDataset(Dataset):
 #     def __init__(self, data_dir, split, models, max_length=512):
@@ -547,7 +578,7 @@ def train_model(config):
     models = setup_models(device, config["vncorenlp_path"])
 
     train_loader = DataLoader(
-        NewsCaptionDataset(config["data_dir"], "train", models),
+        NewsCaptionDataset(config["data_dir"], "demo10", models),
         batch_size=config["batch_size"],
         shuffle=True,
         num_workers=config["num_workers"],
@@ -557,7 +588,7 @@ def train_model(config):
     )
 
     val_loader = DataLoader(
-        NewsCaptionDataset(config["data_dir"], "val", models),
+        NewsCaptionDataset(config["data_dir"], "demo10", models),
         batch_size=config["batch_size"],
         shuffle=False,
         num_workers=config["num_workers"],

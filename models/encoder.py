@@ -730,18 +730,18 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     models = setup_models(device, args.vncorenlp)
-    for split in ["demo10"]:  # DEBUG
-        split_data = load_split(os.path.join(args.data_dir, f"{split}.json"))
-        logging.info("Loaded data")
-        print("Loaded_data")
-        samples, articles, objects = convert_items(split_data, split, models, args.output_dir, args.image_out, args.checkpoint_interval)
-        save_checkpoint(samples, articles, objects, args.output_dir, split)
-        logging.info(f"[{split}] saved: samples={len(samples)}, articles={len(articles)}, objects={len(objects)}")
-    # for split in ["train", "val", "test"]:
+    # for split in ["demo10"]:  # DEBUG
     #     split_data = load_split(os.path.join(args.data_dir, f"{split}.json"))
-    #     logging.info(f"Loaded data: {split}")
-        # print(f"Loaded data: {split}")
+    #     logging.info("Loaded data")
+    #     print("Loaded_data")
     #     samples, articles, objects = convert_items(split_data, split, models, args.output_dir, args.image_out, args.checkpoint_interval)
     #     save_checkpoint(samples, articles, objects, args.output_dir, split)
     #     logging.info(f"[{split}] saved: samples={len(samples)}, articles={len(articles)}, objects={len(objects)}")
-        # print(f"[{split}] saved: samples={len(samples)}, articles={len(articles)}, objects={len(objects)}")
+    for split in ["val", "test" ,"train" ]:
+        split_data = load_split(os.path.join(args.data_dir, f"{split}.json"))
+        logging.info(f"Loaded data: {split}")
+        print(f"Loaded data: {split}")
+        samples, articles, objects = convert_items(split_data, split, models, args.output_dir, args.image_out, args.checkpoint_interval)
+        save_checkpoint(samples, articles, objects, args.output_dir, split)
+        logging.info(f"[{split}] saved: samples={len(samples)}, articles={len(articles)}, objects={len(objects)}")
+        print(f"[{split}] saved: samples={len(samples)}, articles={len(articles)}, objects={len(objects)}")
