@@ -90,10 +90,12 @@ class DynamicConvFacesObjectsDecoder(Decoder):
 
     def forward(self, prev_target, contexts, incremental_state=None,
                 use_layers=None, **kwargs):
-        for key in ['image','article','faces','obj']:
-            feat = contexts[key]
-            mask = contexts[f"{key}_mask"]
-            print(f"{key:>8} feat: {tuple(feat.shape)}, mask: {tuple(mask.shape)}")
+
+        # DEBUG
+        # for key in ['image','article','faces','obj']:
+        #     feat = contexts[key]
+        #     mask = contexts[f"{key}_mask"]
+        #     print(f"{key:>8} feat: {tuple(feat.shape)}, mask: {tuple(mask.shape)}")
 
         # Embed tokens
         X = self.embedder(prev_target)

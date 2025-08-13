@@ -720,23 +720,26 @@ def train_model(config):
                 contexts = {k: v.to(device) for k, v in batch["contexts"].items()}
                 
                 logits, _ = model(caption_ids[:, :-1], contexts)
-                # loss = criterion(
-                #     logits.view(-1, config["vocab_size"]),
-                #     caption_ids[:, 1:].contiguous().view(-1)
-                # )
-                # val_loss += loss.item()
                 
-                # loss, nll_loss = criterion(
-                #     logits.view(-1, logits.size(-1)),
-                #     caption_ids[:, 1:].contiguous().view(-1)
-                # )
-                loss, nll_loss = criterion(
+                output, new_target = criterion(
                     logits.reshape(-1, logits.size(-1)),
                     caption_ids[:, 1:].contiguous().view(-1)
                 )
+                
+                # Initialize cross-entropy loss with ignore_index for padding
+                
+                # Compute total loss by summing losses for each cluster
+                total_loss = 0
+                for out, tgt in zip(output, new_target):
+                    if out is not None and tgt is not None:
+                        # out: (batch_size, num_classes), tgt: (batch_size,)
+                        total_loss += ce_loss(out, tgt)
+                
                 # Normalize loss by number of tokens
                 num_tokens = (caption_ids[:, 1:] != config["decoder_params"]["padding_idx"]).sum()
-                val_loss += loss.item()
+                normalized_loss = total_loss / num_tokens
+                
+                val_loss += total_loss.item()
                 val_total_tokens += num_tokens.item()
         
         avg_val_loss = val_loss / len(val_loader)
