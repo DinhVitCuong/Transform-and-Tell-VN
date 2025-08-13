@@ -714,6 +714,7 @@ def train_model(config):
         # Validation phase
         model.eval()
         val_loss = 0
+        val_total_tokens = 0
         with torch.no_grad():
             for batch in tqdm(val_loader, desc="Validating"):
                 caption_ids = batch["caption_ids"].to(device)
