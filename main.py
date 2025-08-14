@@ -537,14 +537,6 @@ class TransformAndTell(nn.Module):
         # print(f"""CONTEXTS ARTICLE SHAPE: {contexts["article"].shape}""")
         # print(f"""CONTEXTS OBJECT SHAPE: {contexts["obj"].shape}""")
         # print(f"""CONTEXTS FACES SHAPE: {contexts["faces"].shape}""")
-        contexts["image"]=contexts["image"].transpose(0, 1)
-        contexts["article"]=contexts["article"].transpose(0, 1)
-        contexts["obj"]=contexts["obj"].transpose(0, 1)
-        contexts["faces"]=contexts["faces"].transpose(0, 1)
-        transposed_contexts = {}
-        for key in ["image", "article", "faces", "obj"]:
-            transposed_contexts[key] = contexts[key].transpose(0, 1)
-            transposed_contexts[f"{key}_mask"] = contexts[f"{key}_mask"]
         self.eval()
         generated = []
         incremental_state = {}
@@ -578,7 +570,7 @@ def train_model(config):
     models = setup_models(device, config["vncorenlp_path"])
 
     train_loader = DataLoader(
-        NewsCaptionDataset(config["data_dir"], "demo10", models),
+        NewsCaptionDataset(config["data_dir"], "train", models),
         batch_size=config["batch_size"],
         shuffle=True,
         num_workers=config["num_workers"],
@@ -588,7 +580,7 @@ def train_model(config):
     )
 
     val_loader = DataLoader(
-        NewsCaptionDataset(config["data_dir"], "demo10", models),
+        NewsCaptionDataset(config["data_dir"], "val", models),
         batch_size=config["batch_size"],
         shuffle=False,
         num_workers=config["num_workers"],
@@ -598,12 +590,6 @@ def train_model(config):
     )
     print("DATALOADER LOADED!")
     
-    # Initialize model components
-    # embedder = nn.Embedding(
-    #     num_embeddings=config["vocab_size"],
-    #     embedding_dim=config["embed_dim"]
-    # )
-    # Initialize adaptive embedder
     embedder = AdaptiveEmbedding(
         vocab_size=config["embedder"]["vocab_size"],
         padding_idx=config["embedder"]["padding_idx"],
@@ -649,6 +635,7 @@ def train_model(config):
     # Training loop with validation
     best_val_loss = float('inf')
     ce_loss = nn.CrossEntropyLoss(ignore_index=config["decoder_params"]["padding_idx"])
+    print(f"[DEBUG] num of epoch: {config['epochs']}")
     for epoch in range(config["epochs"]):
         model.train()
         total_tokens = 0
@@ -661,34 +648,11 @@ def train_model(config):
             optimizer.zero_grad()
             logits, _ = model(caption_ids[:, :-1], contexts)
             
-            # loss, nll_loss = criterion(
-            #     logits.reshape(-1, logits.size(-1)),
-            #     caption_ids[:, 1:].contiguous().view(-1)
-            # )
-            # # Normalize loss by number of tokens
-            # num_tokens = (caption_ids[:, 1:] != config["decoder_params"]["padding_idx"]).sum()
-            # normalized_loss = loss / num_tokens
-            # # loss.backward()
-            # # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
-            # # optimizer.step()
-            
-            # # train_loss += loss.item()
-            # # Backward pass
-            # optimizer.zero_grad()
-            # normalized_loss.backward()
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
-            # optimizer.step()
-            
-            # total_loss += loss.item()
-            # total_tokens += num_tokens.item()# Compute loss using AdaptiveSoftmax output
             output, new_target = criterion(
                 logits.reshape(-1, logits.size(-1)),
                 caption_ids[:, 1:].contiguous().view(-1)
             )
             
-            # Initialize cross-entropy loss with ignore_index for padding
-            
-            # Compute total loss by summing losses for each cluster
             total_loss = 0
             for out, tgt in zip(output, new_target):
                 if out is not None and tgt is not None:
@@ -709,7 +673,6 @@ def train_model(config):
         avg_loss = total_loss_val / total_tokens
         print(f"Epoch {epoch+1}, Train Loss: {avg_loss:.4f}, Train Tokens: {total_tokens}")
         
-        # avg_train_loss = train_loss / len(train_loader)
         
         # Validation phase
         model.eval()
@@ -727,7 +690,6 @@ def train_model(config):
                     caption_ids[:, 1:].contiguous().view(-1)
                 )
                 
-                # Initialize cross-entropy loss with ignore_index for padding
                 
                 # Compute total loss by summing losses for each cluster
                 total_loss = 0
@@ -758,16 +720,16 @@ def train_model(config):
                        os.path.join(config["output_dir"], "best_model.pth"))
             print("Saved new best model")
     
-    return model
+    return model, models
 
-def evaluate_model(model, config):
+def evaluate_model(model, models, config):
     """Evaluation pipeline"""
     device = next(model.parameters()).device
-    models = setup_models(device, config["vncorenlp_path"])
     
     # Load validation dataset
+    test_dataset = NewsCaptionDataset(config["data_dir"], "test", models)
     test_loader = DataLoader(
-        NewsCaptionDataset(config["data_dir"], "test", models),
+        test_dataset,
         batch_size=config["batch_size"],
         shuffle=False,
         num_workers=config["num_workers"],
@@ -796,46 +758,11 @@ def evaluate_model(model, config):
     ).to(device)
 
     model.eval()
-    total_loss = 0
     all_predictions = []
-
-    # criterion = nn.CrossEntropyLoss(ignore_index=test_dataset.tokenizer.pad_token_id)
-    
-    # with torch.no_grad():
-    #     for batch in tqdm(test_loader, desc="Evaluating"):
-    #         caption_ids = batch["caption_ids"].to(device)
-    #         contexts = {k: v.to(device) for k, v in batch["contexts"].items()}
-            
-    #         # Forward pass
-    #         logits, _ = model(caption_ids[:, :-1], contexts)
-            
-    #         # Calculate loss
-            
-    #         loss, nll_loss = criterion(
-    #             logits.view(-1, logits.size(-1)),
-    #             caption_ids[:, 1:].contiguous().view(-1)
-    #         )
-    #         print(f"loss type: {type(loss)}, loss: {loss}")
-    #         print(f"nll_loss type: {type(nll_loss)}, nll_loss: {nll_loss}")
-    #         # Normalize loss by number of tokens
-    #         num_tokens = (caption_ids[:, 1:] != config["decoder_params"]["padding_idx"]).sum()
-    #         test_loss += loss.item()
-    #         test_total_tokens += num_tokens.item()
-            
-    #         # Generate captions
-    #         for i in range(len(batch["image"])):
-    #             contexts_i = {k: v[i].unsqueeze(0) for k, v in contexts.items()}
-    #             generated_ids = model.generate(contexts_i)
-    #             generated_caption = test_dataset.tokenizer.decode(generated_ids)
-    #             all_predictions.append({
-    #                 "image_path": batch["image_path"][i],
-    #                 "true_caption": batch["caption"][i],
-    #                 "predicted_caption": generated_caption
-    #             })
-    
-    # test_avg_loss = total_loss / len(test_loader)    
-    # print(f"Test Loss: {test_avg_loss:.4f}, Test Tokens: {test_total_tokens}")
     ce_loss = nn.CrossEntropyLoss(ignore_index=config["decoder_params"]["padding_idx"])
+    test_weighted_loss = 0.0
+    test_total_tokens = 0
+
     with torch.no_grad():
         for batch in tqdm(test_loader, desc="Evaluating"):
             caption_ids = batch["caption_ids"].to(device)
@@ -850,18 +777,25 @@ def evaluate_model(model, config):
                 caption_ids[:, 1:].contiguous().view(-1)
             )
             
-            # Compute total loss
-            total_loss = 0
+            # Compute weighted batch loss
+            batch_weighted_loss = 0.0
+            batch_samples = 0
             for out, tgt in zip(output, new_target):
                 if out is not None and tgt is not None:
-                    total_loss += ce_loss(out, tgt)
+                    cluster_mean_loss = ce_loss(out, tgt)
+                    cluster_size = tgt.size(0)
+                    batch_weighted_loss += cluster_mean_loss.item() * cluster_size
+                    batch_samples += cluster_size
             
-            # Normalize loss by number of tokens
-            num_tokens = (caption_ids[:, 1:] != config["decoder_params"]["padding_idx"]).sum()
-            test_loss += total_loss.item()
-            test_total_tokens += num_tokens.item()
+            # Normalize by number of tokens
+            num_tokens = (caption_ids[:, 1:] != config["decoder_params"]["padding_idx"]).sum().item()
+            # Assert batch_samples == num_tokens for sanity
+            assert batch_samples == num_tokens, f"Mismatch in token counts: {batch_samples} vs {num_tokens}"
             
-            # Generate captions (unchanged)
+            test_weighted_loss += batch_weighted_loss
+            test_total_tokens += num_tokens
+            
+            # Generate captions
             for i in range(len(batch["image"])):
                 contexts_i = {k: v[i].unsqueeze(0) for k, v in contexts.items()}
                 generated_ids = model.generate(contexts_i)
@@ -872,10 +806,12 @@ def evaluate_model(model, config):
                     "predicted_caption": generated_caption
                 })
 
-    test_avg_loss = test_loss / test_total_tokens
+    if test_total_tokens > 0:
+        test_avg_loss = test_weighted_loss / test_total_tokens
+    else:
+        test_avg_loss = 0.0
     print(f"Test Loss: {test_avg_loss:.4f}, Test Tokens: {test_total_tokens}")
         
-    
     # Save predictions
     with open(os.path.join(config["output_dir"], "predictions.json"), "w") as f:
         json.dump(all_predictions, f, indent=2)
@@ -935,11 +871,11 @@ if __name__ == "__main__":
     }
     
     # Run training
-    trained_model = train_model(config)
+    trained_model, models = train_model(config)
     
     # Save model
     torch.save(trained_model.state_dict(), 
               os.path.join(config["output_dir"], "transform_and_tell_model.pth"))
     
     # Run evaluation
-    test_loss, predictions = evaluate_model(trained_model, config)
+    test_loss, predictions = evaluate_model(trained_model, models, config)
