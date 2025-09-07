@@ -1,8 +1,5 @@
-2025-07-31 21:35:26,992 - INFO - Loaded arguments
-2025-07-31 21:35:27,233 - INFO - VnCoreNLP will be initialized in main process
-2025-07-31 21:35:29,708 - INFO - Loaded FaceNet
-2025-07-31 21:35:33,190 - INFO - Loaded ResNet152
-2025-07-31 21:35:39,010 - INFO - Loaded YOLOv8
-2025-07-31 21:35:43,623 - INFO - Loaded PhoBERT
-2025-07-31 21:35:43,624 - INFO - Loading /data2/npl/ICEK/Wikipedia/content/ver4/val.json
-2025-07-31 21:35:45,253 - INFO - Loaded data
+2025-08-10 13:41:45,331 - INFO - Loaded data
+2025-08-10 13:41:45,332 - INFO - Started preprocessing texts for split demo10
+2025-08-10 13:41:45,334 - INFO - Preprocessing item 0 (1/11)...
+2025-08-10 13:41:45,334 - INFO - Context for 0: ở Đông Nam Á (xám đậm)  –  [Chú giải] Thái Lan (tiếng Thái: ประเทศไทย, chuyển tự Prathet Thai), hay ...
+2025-08-10 13:41:45,334 - INFO - Caption for 0: Bangkok, Thái Lan...

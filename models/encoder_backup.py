@@ -214,7 +214,7 @@ def setup_models(device: torch.device, vncorenlp_path="/data2/npl/ICEK/VnCoreNLP
     vncore = py_vncorenlp.VnCoreNLP(
         annotators=["wseg", "pos", "ner", "parse"],
         save_dir=vncorenlp_path,
-        max_heap_size='-Xmx10g'
+        max_heap_size='-Xmx6g'
     )
     print("LOADED VNCORENLP!")
     
@@ -384,17 +384,12 @@ def load_split(path: str) -> Dict[str, dict]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def _write_json_minified(path: str, obj):
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        # separators removes all extra spaces, indent=None avoids newlines
-        json.dump(obj, f, ensure_ascii=False, separators=(",", ":"), indent=None)
-    os.replace(tmp, path)
 
 def save_checkpoint(samples: List[dict], articles: Dict[str, dict], objects: List[dict], out_dir: str, split: str):
     with open(os.path.join(out_dir, f"{split}.json"), "w", encoding="utf-8") as f:
         json.dump(samples, f, ensure_ascii=False, indent=2)
-    _write_json_minified(os.path.join(out_dir, f"articles_{split}.json"), articles)
+    with open(os.path.join(out_dir, f"articles_{split}.json"), "w", encoding="utf-8") as f:
+        json.dump(articles, f, ensure_ascii=False, indent=2)
     with open(os.path.join(out_dir, f"objects_{split}.json"), "w", encoding="utf-8") as f:
         json.dump(objects, f, ensure_ascii=False, indent=2)
 
@@ -422,7 +417,7 @@ def process_item(sid: str, item: dict, segmented_context: str, cap_ner: Dict[str
     # Prepare image path; optionally copy to image_out
     img_id = item["image_path"].split("images/")[-1]
     img_path = f"/data2/npl/ICEK/Wikipedia/images_resized/{img_id}"
-    # print(f"Image Path: {img_path}")
+    print(f"Image Path: {img_path}")
     if image_out:
         os.makedirs(image_out, exist_ok=True)
         dst = os.path.join(image_out, f"{sample_id}.jpg")
@@ -443,11 +438,16 @@ def process_item(sid: str, item: dict, segmented_context: str, cap_ner: Dict[str
     mtcnn = models["mtcnn"]; facenet = models["facenet"]; resnet = models["resnet"]
     resnet_object = models["resnet_object"]; yolo = models["yolo"]; preprocess = models["preprocess"]
     embedder = models["embedder"]; device = models["device"]
+    print(f"Done load models")
 
     face_info = detect_faces(image, mtcnn, facenet, device)
+    print(f"Done face")
     obj_feats = detect_objects(img_path, yolo, resnet_object, preprocess, device)
+    print(f"Done obj")
     img_feat = np.array(image_feature(image, resnet, preprocess, device), dtype=np.float32)
+    print(f"Done img")
     art_embed = embedder([item.get("caption", "")], [segmented_context])[0].cpu().numpy()
+    print(f"Done art")
 
     features = {
         "image_feature": img_feat,
@@ -480,151 +480,21 @@ def process_item(sid: str, item: dict, segmented_context: str, cap_ner: Dict[str
 
     return sample_id, features, sample, article, object_data
 
-def _open_new_shard(output_dir: str, split: str, shard_idx: int):
-    os.makedirs(output_dir, exist_ok=True)
-    shard_path = os.path.join(output_dir, f"{split}_feat_{shard_idx:03d}.h5")
-    h5 = h5py.File(shard_path, "a", libver="latest")
-    root = h5.require_group("samples")
-    return h5, root, shard_path
+# --- HDF5 writing (giant shard file) ---
 
-def _write_sample_to_h5(root: h5py.Group, sample_id: str, features: dict):
-    g = root.create_group(sample_id)
-    # Numeric arrays (allow ragged shapes by separate datasets per sample)
-    g.create_dataset("image_feature", data=features["image_feature"])
-    g.create_dataset("face_embeddings", data=features["face_embeddings"])
-    g.create_dataset("face_detect_probs", data=features["face_detect_probs"])
-    g.attrs["face_n_faces"] = int(np.array(features["face_n_faces"]).item())
-    g.create_dataset("object_features", data=features["object_features"])
-    g.create_dataset("article_embed", data=features["article_embed"])
-    # NER (store as UTF-8 JSON string)
-    ner_json = json.dumps(
-        {"caption_ner": features["caption_ner"], "context_ner": features["context_ner"]},
-        ensure_ascii=False,
-    )
-    dt = h5py.string_dtype(encoding="utf-8")
-    g.create_dataset("ner", data=ner_json, dtype=dt)
+def write_sample_to_h5(file: h5py.File, sample_id: str, features: dict):
+    grp = file.create_group(sample_id)
+    for key, value in features.items():
+        if isinstance(value, np.ndarray):
+            file[ sample_id ].create_dataset(key, data=value, compression="lzf", chunks=True)
+        else:
+            dt = h5py.string_dtype(encoding="utf-8")
+            file[ sample_id ].create_dataset(key, data=json.dumps(value, ensure_ascii=False), dtype=dt)
 
-def _dump_index_json(output_dir: str, split: str, index: dict):
-    idx_path = os.path.join(output_dir, f"{split}_h5_index.json")
-    tmp = idx_path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(index, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, idx_path)
 
 # ----------------------------
 # Split conversion with H5 shards
 # ----------------------------
-
-# def convert_items(items: Dict[str, dict], split: str, models: dict, output_dir: str,
-#                   image_out: str = None, checkpoint_interval: int = 100):
-#     samples_all, articles_all, objects_all = [], {}, []
-
-#     vncore = models["vncore"]
-
-#     # Preprocess text (segmentation + NER) first
-#     items_to_process = []
-#     logging.info(f"Preprocessing texts for split {split}")
-#     for sid, item in tqdm(list(items.items()), desc=f"Pre-NER {split}"):
-#         context = " ".join(item.get("context", []))
-#         caption = item.get("caption", "")
-#         try:
-#             segmented_context = segment_text(context, vncore)
-#             cap_ner = extract_entities(caption, vncore)
-#             ctx_ner = extract_entities(context, vncore)
-#             items_to_process.append((sid, item, segmented_context, cap_ner, ctx_ner))
-#         except Exception as e:
-#             logging.error(f"Text preprocess error {sid}: {e}")
-#             continue
-
-#     total = len(items_to_process)
-#     logging.info(f"DONE NER. Total record to process: {total}")
-#     for sid, item, segmented_context, cap_ner, ctx_ner in items_to_process:
-#         try:
-#             sample_id, features, sample, article, object_data = process_item(
-#                 sid, item, segmented_context, cap_ner, ctx_ner, models, image_out, split
-#             )
-#             print(f"DONE PROCESS {sid}")
-#         except:
-#             print(f"ERROR PROCESSING ITEM No.{sid}")
-#     return samples_all, articles_all, objects_all
-
-# def convert_items(items: Dict[str, dict], split: str, models: dict, output_dir: str,
-#                   image_out: str = None, checkpoint_interval: int = 2000):
-#     samples_all, articles_all, objects_all = [], {}, []
-#     vncore = models["vncore"]
-
-#     # --- shard init ---
-#     total = len(items)
-#     SHARD_SIZE = 2000
-#     need_shard = total >= 1
-#     shard_size = SHARD_SIZE if need_shard else max(total, 1)
-
-#     shard_idx, in_shard, processed = 0, 0, 0
-#     h5f, h5root, shard_path = _open_new_shard(output_dir, split, shard_idx)  # open NEW file
-#     index = {}   # sample_id -> {"shard": basename, "group": f"/samples/{sample_id}"}
-
-#     logging.info(f"[{split}] streaming encode+write: {total} items; shard_size={shard_size}")
-
-#     # --- STREAM: do NER + process + write, item-by-item ---
-#     for sid, item in tqdm(list(items.items()), desc=f"Encode+Save {split}"):
-#         try:
-#             # inline text preprocess (instead of pre-building a huge list)
-#             context = " ".join(item.get("context", []))
-#             caption = item.get("caption", "")
-#             segmented_context = segment_text(context, vncore)
-#             cap_ner = extract_entities(caption, vncore)
-#             ctx_ner = extract_entities(context, vncore)
-
-#             sample_id, features, sample, article, object_data = process_item(
-#                 sid, item, segmented_context, cap_ner, ctx_ner, models, image_out, split
-#             )
-#             if features is None:
-#                 continue
-
-#             # write immediately
-#             _write_sample_to_h5(h5root, sample_id, features)
-#             index[sample_id] = {
-#                 "shard": os.path.basename(shard_path),
-#                 "group": f"/samples/{sample_id}"
-#             }
-
-#             # light metas
-#             samples_all.append(sample)
-#             articles_all[sample_id] = article
-#             objects_all.append({
-#                 "_id": sample_id,
-#                 "h5_shard": os.path.basename(shard_path),
-#                 "group": f"/samples/{sample_id}",
-#                 "n_objects": int(np.array(features["object_features"]).shape[0])
-#             })
-
-#             in_shard += 1
-#             processed += 1
-
-#             # rotate shard when full
-#             if in_shard >= shard_size and processed < total:
-#                 h5f.flush(); h5f.close()
-#                 shard_idx += 1
-#                 in_shard = 0
-#                 h5f, h5root, shard_path = _open_new_shard(output_dir, split, shard_idx)
-#                 logging.info(f"[{split}] rotated to shard {shard_idx:03d}")
-
-#             # light checkpoint (index only) every shard or big chunk
-#             if processed % checkpoint_interval == 0:
-#                 _dump_index_json(output_dir, split, index)
-
-#         except Exception as e:
-#             logging.exception(f"[{split}] ERROR PROCESSING ITEM {sid}: {e}")
-#             continue
-
-#     # finalize
-#     try:
-#         h5f.flush(); h5f.close()
-#     except Exception:
-#         pass
-#     _dump_index_json(output_dir, split, index)
-#     return samples_all, articles_all, objects_all
-
 
 def convert_items(items: Dict[str, dict], split: str, models: dict, output_dir: str,
                   image_out: str = None, checkpoint_interval: int = 100):
@@ -632,7 +502,7 @@ def convert_items(items: Dict[str, dict], split: str, models: dict, output_dir: 
 
     vncore = models["vncore"]
 
-    # 1) Preprocess text (segmentation + NER) first
+    # Preprocess text (segmentation + NER) first
     items_to_process = []
     logging.info(f"Preprocessing texts for split {split}")
     for sid, item in tqdm(list(items.items()), desc=f"Pre-NER {split}"):
@@ -650,69 +520,91 @@ def convert_items(items: Dict[str, dict], split: str, models: dict, output_dir: 
     total = len(items_to_process)
     logging.info(f"DONE NER. Total record to process: {total}")
 
-    # 2) Shard setup
-    need_shard = total >= SHARD_THRESHOLD
-    shard_size = SHARD_SIZE if need_shard else max(total, 1)
+    # Decide number of shards (each of size up to SHARD_SIZE)
+    num_shards = (total + SHARD_SIZE - 1) // SHARD_SIZE if total > 0 else 0
 
-    shard_idx = 0
-    in_shard = 0
-    h5f, h5root, shard_path = _open_new_shard(output_dir, split, shard_idx)
-    index = {}   # sample_id -> {"shard": basename, "group": f"/samples/{sample_id}"}
-    logging.info(f"COMPLETE INIT FIRST H5 SHARD {split}")
-    # 3) Iterate and write
-    processed = 0
-    for sid, item, segmented_context, cap_ner, ctx_ner in tqdm(items_to_process, desc=f"Encode+Save {split}"):
-        try:
-            sample_id, features, sample, article, object_data = process_item(
-                sid, item, segmented_context, cap_ner, ctx_ner, models, image_out, split
-            )
-            if features is None:
-                continue
+    if num_shards == 0:
+        return [], {}, []
 
-            # Write features → current shard
-            _write_sample_to_h5(h5root, sample_id, features)
-            index[sample_id] = {
-                "shard": os.path.basename(shard_path),
-                "group": f"/samples/{sample_id}"
-            }
+    # If only one shard, use simpler names in output_dir
+    single_shard = (num_shards == 1)
 
-            # Collect light metadata for JSON files
-            samples_all.append(sample)
-            articles_all[sample_id] = article
-            # Point objects to H5 instead of inlining giant arrays
-            objects_all.append({
-                "_id": sample_id,
-                "h5_shard": os.path.basename(shard_path),
-                "group": f"/samples/{sample_id}",
-                "n_objects": int(np.array(features["object_features"]).shape[0])
-            })
+    processed_count = 0
 
-            in_shard += 1
-            processed += 1
+    for shard_no in range(num_shards):
+        start = shard_no * SHARD_SIZE
+        end = min(total, (shard_no + 1) * SHARD_SIZE)
+        chunk = items_to_process[start:end]
 
-            # Rotate shard
-            if in_shard >= shard_size and processed < total:
-                h5f.flush(); h5f.close()
-                shard_idx += 1
-                in_shard = 0
-                h5f, h5root, shard_path = _open_new_shard(output_dir, split, shard_idx)
+        # Shard paths
+        if single_shard:
+            shard_dir = output_dir
+            h5_path = os.path.join(output_dir, f"{split}_features.h5")
+            json_path = os.path.join(output_dir, f"{split}.json")
+            art_json = os.path.join(output_dir, f"articles_{split}.json")
+            obj_json = os.path.join(output_dir, f"objects_{split}.json")
+        else:
+            shard_dir = os.path.join(output_dir, f"{split}_shard{shard_no:03d}")
+            os.makedirs(shard_dir, exist_ok=True)
+            h5_path = os.path.join(shard_dir, f"{split}_features_shard{shard_no:03d}.h5")
+            json_path = os.path.join(shard_dir, f"{split}_shard{shard_no:03d}.json")
+            art_json = os.path.join(shard_dir, f"articles_{split}_shard{shard_no:03d}.json")
+            obj_json = os.path.join(shard_dir, f"objects_{split}_shard{shard_no:03d}.json")
 
-            # Periodic flush & index checkpoint
-            if processed % checkpoint_interval == 0:
-                h5f.flush()
-                _dump_index_json(output_dir, split, index)
+        # Prepare accumulators for this shard's JSONs
+        shard_samples, shard_articles, shard_objects = [], {}, []
 
-        except Exception as e:
-            logging.exception(f"ERROR PROCESSING ITEM {sid}: {e}")
-            continue
+        with h5py.File(h5_path, "w", libver="latest") as h5f:
+            for sid, item, segmented_context, cap_ner, ctx_ner in tqdm(chunk, desc=f"Process {split} shard {shard_no:03d}"):
+                try:
+                    sample_id, features, sample, article, object_data = process_item(
+                        sid, item, segmented_context, cap_ner, ctx_ner, models, image_out, split
+                    )
+                    if features is None:
+                        continue
 
-    # Finalize
-    try:
-        h5f.flush(); h5f.close()
-    except Exception:
-        pass
-    _dump_index_json(output_dir, split, index)
+                    # Write to this shard H5 as a group
+                    write_sample_to_h5(h5f, sample_id, features)
+
+                    # JSON: feature_path (relative to shard_dir), feature_key = "/{sample_id}"
+                    sample["feature_path"] = _rel_or_abs(h5_path, os.path.dirname(json_path), use_abs=False)
+                    sample["feature_key"] = f"/{sample_id}"
+
+                    shard_samples.append(sample)
+                    shard_articles[sample_id] = article
+                    shard_objects.append(object_data)
+
+                    processed_count += 1
+                    if processed_count % checkpoint_interval == 0:
+                        # lightweight checkpoint: write current shard partials
+                        with open(json_path, "w", encoding="utf-8") as f:
+                            json.dump(shard_samples, f, ensure_ascii=False, indent=2)
+                        with open(art_json, "w", encoding="utf-8") as f:
+                            json.dump(shard_articles, f, ensure_ascii=False, indent=2)
+                        with open(obj_json, "w", encoding="utf-8") as f:
+                            json.dump(shard_objects, f, ensure_ascii=False, indent=2)
+                except Exception as e:
+                    print(f"Error processing {sid}: {e}")
+                    logging.error(f"Error processing {sid}: {e}")
+                    continue
+                finally:
+                    torch.cuda.empty_cache()
+
+        # Write final shard JSONs
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(shard_samples, f, ensure_ascii=False, indent=2)
+        with open(art_json, "w", encoding="utf-8") as f:
+            json.dump(shard_articles, f, ensure_ascii=False, indent=2)
+        with open(obj_json, "w", encoding="utf-8") as f:
+            json.dump(shard_objects, f, ensure_ascii=False, indent=2)
+
+        # Extend global holders (optional return)
+        samples_all.extend(shard_samples)
+        articles_all.update(shard_articles)
+        objects_all.extend(shard_objects)
+
     return samples_all, articles_all, objects_all
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Create ViWiki dataset files")
@@ -730,18 +622,11 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     models = setup_models(device, args.vncorenlp)
-    # for split in ["demo10"]:  # DEBUG
+    for split in ["demo10"]:  # DEBUG
+        split_data = load_split(os.path.join(args.data_dir, f"{split}.json"))
+        logging.info("Loaded data")
+        samples, articles, objects = convert_items(split_data, split, models, args.output_dir, args.image_out, args.checkpoint_interval)
+    # for split in ["train", "val", "test"]:
     #     split_data = load_split(os.path.join(args.data_dir, f"{split}.json"))
-    #     logging.info("Loaded data")
-    #     print("Loaded_data")
     #     samples, articles, objects = convert_items(split_data, split, models, args.output_dir, args.image_out, args.checkpoint_interval)
     #     save_checkpoint(samples, articles, objects, args.output_dir, split)
-    #     logging.info(f"[{split}] saved: samples={len(samples)}, articles={len(articles)}, objects={len(objects)}")
-    for split in ["train" ]:
-        split_data = load_split(os.path.join(args.data_dir, f"{split}.json"))
-        logging.info(f"Loaded data: {split}")
-        print(f"Loaded data: {split}")
-        samples, articles, objects = convert_items(split_data, split, models, args.output_dir, args.image_out, args.checkpoint_interval)
-        save_checkpoint(samples, articles, objects, args.output_dir, split)
-        logging.info(f"[{split}] saved: samples={len(samples)}, articles={len(articles)}, objects={len(objects)}")
-        print(f"[{split}] saved: samples={len(samples)}, articles={len(articles)}, objects={len(objects)}")
