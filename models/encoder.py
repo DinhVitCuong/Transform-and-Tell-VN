@@ -486,23 +486,7 @@ def _open_new_shard(output_dir: str, split: str, shard_idx: int):
     h5 = h5py.File(shard_path, "a", libver="latest")
     root = h5.require_group("samples")
     return h5, root, shard_path
-
-def _write_sample_to_h5(root: h5py.Group, sample_id: str, features: dict):
-    g = root.create_group(sample_id)
-    # Numeric arrays (allow ragged shapes by separate datasets per sample)
-    g.create_dataset("image_feature", data=features["image_feature"])
-    g.create_dataset("face_embeddings", data=features["face_embeddings"])
-    g.create_dataset("face_detect_probs", data=features["face_detect_probs"])
-    g.attrs["face_n_faces"] = int(np.array(features["face_n_faces"]).item())
-    g.create_dataset("object_features", data=features["object_features"])
-    g.create_dataset("article_embed", data=features["article_embed"])
-    # NER (store as UTF-8 JSON string)
-    ner_json = json.dumps(
-        {"caption_ner": features["caption_ner"], "context_ner": features["context_ner"]},
-        ensure_ascii=False,
-    )
-    dt = h5py.string_dtype(encoding="utf-8")
-    g.create_dataset("ner", data=ner_json, dtype=dt)
+ 
 
 def _dump_index_json(output_dir: str, split: str, index: dict):
     idx_path = os.path.join(output_dir, f"{split}_h5_index.json")
@@ -510,120 +494,6 @@ def _dump_index_json(output_dir: str, split: str, index: dict):
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(index, f, ensure_ascii=False, indent=2)
     os.replace(tmp, idx_path)
-
-# ----------------------------
-# Split conversion with H5 shards
-# ----------------------------
-
-# def convert_items(items: Dict[str, dict], split: str, models: dict, output_dir: str,
-#                   image_out: str = None, checkpoint_interval: int = 100):
-#     samples_all, articles_all, objects_all = [], {}, []
-
-#     vncore = models["vncore"]
-
-#     # Preprocess text (segmentation + NER) first
-#     items_to_process = []
-#     logging.info(f"Preprocessing texts for split {split}")
-#     for sid, item in tqdm(list(items.items()), desc=f"Pre-NER {split}"):
-#         context = " ".join(item.get("context", []))
-#         caption = item.get("caption", "")
-#         try:
-#             segmented_context = segment_text(context, vncore)
-#             cap_ner = extract_entities(caption, vncore)
-#             ctx_ner = extract_entities(context, vncore)
-#             items_to_process.append((sid, item, segmented_context, cap_ner, ctx_ner))
-#         except Exception as e:
-#             logging.error(f"Text preprocess error {sid}: {e}")
-#             continue
-
-#     total = len(items_to_process)
-#     logging.info(f"DONE NER. Total record to process: {total}")
-#     for sid, item, segmented_context, cap_ner, ctx_ner in items_to_process:
-#         try:
-#             sample_id, features, sample, article, object_data = process_item(
-#                 sid, item, segmented_context, cap_ner, ctx_ner, models, image_out, split
-#             )
-#             print(f"DONE PROCESS {sid}")
-#         except:
-#             print(f"ERROR PROCESSING ITEM No.{sid}")
-#     return samples_all, articles_all, objects_all
-
-# def convert_items(items: Dict[str, dict], split: str, models: dict, output_dir: str,
-#                   image_out: str = None, checkpoint_interval: int = 2000):
-#     samples_all, articles_all, objects_all = [], {}, []
-#     vncore = models["vncore"]
-
-#     # --- shard init ---
-#     total = len(items)
-#     SHARD_SIZE = 2000
-#     need_shard = total >= 1
-#     shard_size = SHARD_SIZE if need_shard else max(total, 1)
-
-#     shard_idx, in_shard, processed = 0, 0, 0
-#     h5f, h5root, shard_path = _open_new_shard(output_dir, split, shard_idx)  # open NEW file
-#     index = {}   # sample_id -> {"shard": basename, "group": f"/samples/{sample_id}"}
-
-#     logging.info(f"[{split}] streaming encode+write: {total} items; shard_size={shard_size}")
-
-#     # --- STREAM: do NER + process + write, item-by-item ---
-#     for sid, item in tqdm(list(items.items()), desc=f"Encode+Save {split}"):
-#         try:
-#             # inline text preprocess (instead of pre-building a huge list)
-#             context = " ".join(item.get("context", []))
-#             caption = item.get("caption", "")
-#             segmented_context = segment_text(context, vncore)
-#             cap_ner = extract_entities(caption, vncore)
-#             ctx_ner = extract_entities(context, vncore)
-
-#             sample_id, features, sample, article, object_data = process_item(
-#                 sid, item, segmented_context, cap_ner, ctx_ner, models, image_out, split
-#             )
-#             if features is None:
-#                 continue
-
-#             # write immediately
-#             _write_sample_to_h5(h5root, sample_id, features)
-#             index[sample_id] = {
-#                 "shard": os.path.basename(shard_path),
-#                 "group": f"/samples/{sample_id}"
-#             }
-
-#             # light metas
-#             samples_all.append(sample)
-#             articles_all[sample_id] = article
-#             objects_all.append({
-#                 "_id": sample_id,
-#                 "h5_shard": os.path.basename(shard_path),
-#                 "group": f"/samples/{sample_id}",
-#                 "n_objects": int(np.array(features["object_features"]).shape[0])
-#             })
-
-#             in_shard += 1
-#             processed += 1
-
-#             # rotate shard when full
-#             if in_shard >= shard_size and processed < total:
-#                 h5f.flush(); h5f.close()
-#                 shard_idx += 1
-#                 in_shard = 0
-#                 h5f, h5root, shard_path = _open_new_shard(output_dir, split, shard_idx)
-#                 logging.info(f"[{split}] rotated to shard {shard_idx:03d}")
-
-#             # light checkpoint (index only) every shard or big chunk
-#             if processed % checkpoint_interval == 0:
-#                 _dump_index_json(output_dir, split, index)
-
-#         except Exception as e:
-#             logging.exception(f"[{split}] ERROR PROCESSING ITEM {sid}: {e}")
-#             continue
-
-#     # finalize
-#     try:
-#         h5f.flush(); h5f.close()
-#     except Exception:
-#         pass
-#     _dump_index_json(output_dir, split, index)
-#     return samples_all, articles_all, objects_all
 
 
 def convert_items(items: Dict[str, dict], split: str, models: dict, output_dir: str,
