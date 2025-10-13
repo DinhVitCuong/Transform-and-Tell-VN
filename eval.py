@@ -1,5 +1,6 @@
 import torch
 from main import load_saved_model, evaluate_model, NewsCaptionDataset, pad_and_collate, _h5_worker_init_fn
+from models.encoder import setup_models  # Import setup_models directly
 from torch.utils.data import DataLoader
 import os
 
@@ -13,7 +14,7 @@ config = {
     "batch_size": 8,
     "num_workers": 0,
     "epochs": 400,
-    "lr": 1e-4,
+    "lr": 5e-5,  # Match the learning rate from main.py for consistency
     "embedder": {
         "vocab_size": 64001,
         "initial_dim": 1024,
@@ -55,13 +56,39 @@ config = {
 }
 
 # Path to the saved model
-model_path = os.path.join(config["output_dir"], "best_model.pth")  # or "transform_and_tell_model.pth"
+model_path = os.path.join(config["output_dir"], "best_model.pth")
+
+# Initialize models (including tokenizer and VnCoreNLP)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+try:
+    models = setup_models(device, config["vncorenlp_path"])
+except Exception as e:
+    print(f"Error initializing models: {e}")
+    exit(1)
 
 # Load the model
-loaded_model, loaded_models = load_saved_model(config, model_path)
+try:
+    if os.path.exists(model_path):
+        loaded_model, models = load_saved_model(config, model_path, models)
+        print(f"Loaded {model_path} for evaluation")
+    else:
+        fallback_path = os.path.join(config["output_dir"], "transform_and_tell_model.pth")
+        if os.path.exists(fallback_path):
+            loaded_model, models = load_saved_model(config, fallback_path, models)
+            print(f"best_model.pth not found, loaded {fallback_path} instead")
+        else:
+            print(f"Error: Neither {model_path} nor {fallback_path} found")
+            exit(1)
+except Exception as e:
+    print(f"Error loading model: {e}")
+    exit(1)
 
 # Run evaluation
-test_loss, predictions = evaluate_model(loaded_model, loaded_models, config)
+try:
+    test_loss, predictions = evaluate_model(loaded_model, models, config)
+except Exception as e:
+    print(f"Error during evaluation: {e}")
+    exit(1)
 
 # Print results
 print(f"Test Loss: {test_loss:.4f}")

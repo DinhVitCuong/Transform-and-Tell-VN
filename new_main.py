@@ -9,7 +9,7 @@ import os
 from tqdm import tqdm
 # Import necessary components from previous implementations
 from models.decoder import DynamicConvFacesObjectsDecoder
-from models.encoder import setup_models
+from models.encoder import setup_models, segment_text, detect_faces, detect_objects, image_feature
 from tell.modules.token_embedders import AdaptiveEmbedding
 from tell.modules import AdaptiveSoftmax
 Image.MAX_IMAGE_PIXELS = None
@@ -79,67 +79,25 @@ def _h5_worker_init_fn(_):
         # lazy open will occur in __getitem__
 
 class NewsCaptionDataset(Dataset):
-    """
-    Expects:
-      data_dir/
-        train.json, val.json, test.json   # metadata (captions, image_path, _id, ...)
-      features_dir/  (defaults to data_dir if not given)
-        {split}_h5_index.json             # {"<id>": {"shard":"{split}_feat_000.h5","group":"/samples/<id>"}}
-        {split}_feat_000.h5, {split}_feat_001.h5, ...
-
-    H5 group per sample contains (uncompressed is fine):
-      image_feature (Timg, Dimg)
-      object_features (Kobj, Dobj)
-      article_embed (L, Dart)
-      face_embeddings (Nf, Df)           [optional]
-      face_detect_probs (Nf,)            [optional]
-      attr: face_n_faces                 [optional]
-      ner: JSON string with {caption_ner, context_ner} [optional]
-    """
     def __init__(self, data_dir, split, models, features_dir=None, max_length=512):
         super().__init__()
         self.data_dir     = data_dir
-        self.features_dir = features_dir or data_dir
         self.split        = split
         self.models       = models
         self.tokenizer    = models.get("tokenizer", None)
         self.max_length   = max_length
 
-        # ---- load metadata list (samples) ----
-        meta_path = os.path.join(self.data_dir, f"{split}.json")
-        with open(meta_path, "r", encoding="utf-8") as f:
-            self.meta = json.load(f)
-        # Map id -> record for O(1) access
-        self.ids = [str(m["_id"]) for m in self.meta]
-        # Stable order (numeric if possible)
-        try:
-            self.ids = sorted(self.ids, key=lambda x: int(x))
-        except Exception:
-            self.ids = sorted(self.ids)
-        self._meta_by_id = {str(m["_id"]): m for m in self.meta}
-
-        # ---- load H5 index ----
-        idx_path = os.path.join(self.features_dir, f"{split}_h5_index.json")
-        with open(idx_path, "r", encoding="utf-8") as f:
-            self._h5_index = json.load(f)
-
-        # per-worker shard handles
-        self._open_files = {}  # shard_basename -> h5py.File
-
+        # Load the raw data
+        data_file = os.path.join(data_dir, f"{split}.json")
+        with open(data_file, 'r') as f:
+            self.data = json.load(f)
+        
+        # Setup model for feature extraction
+        self.embedder = self.models["embedder"]
+        self.device = self.models["device"]
+        
     def __len__(self):
         return len(self.ids)
-
-    # ---------- H5 helpers ----------
-    def _open_shard(self, shard_basename: str):
-        f = self._open_files.get(shard_basename)
-        if f is None:
-            f = h5py.File(os.path.join(self.features_dir, shard_basename), "r", libver="latest")
-            self._open_files[shard_basename] = f
-        return f
-
-    def _get_group(self, sample_id: str):
-        info = self._h5_index[sample_id]  # {"shard": "..._feat_XXX.h5", "group": "/samples/<id>"}
-        return self._open_shard(info["shard"])[info["group"]]
 
     # ---------- small utils ----------
     @staticmethod
@@ -177,21 +135,44 @@ class NewsCaptionDataset(Dataset):
         return arr, mask
 
     def __getitem__(self, idx):
-        sid = self.ids[idx]
-        rec = self._meta_by_id.get(sid, {})
-        caption   = rec.get("caption", "")
-        image_path = rec.get("image_path", "")
+        item = self.data[idx]
 
-        # ---- read H5 features ----
+        context = " ".join(item.get("paragraphs", []))
+        caption = item.get("caption", "")
         try:
-            g = self._get_group(sid)
+            segmented_context = segment_text(context, models["vncore"])
+        except Exception as e:
+            logging.error(f"Text preprocess error {idx}: {e}")
 
-            img = self._ensure_float32(g["image_feature"][()])
-            obj = self._ensure_float32(g["object_features"][()])
-            art = self._ensure_float32(g["article_embed"][()])
+        try:
+            img_id = item["image_path"].split("images/")[-1]
+            img_path = f"/data2/npl/ICEK/Wikipedia/images_resized/{img_id}"
+            image = Image.open(img_path).convert("RGB")
+            mtcnn = self.models["mtcnn"]; facenet = self.models["facenet"]; resnet = self.models["resnet"]
+            resnet_object = self.models["resnet_object"]; yolo = self.models["yolo"]; preprocess = self.models["preprocess"]
+            embedder = self.models["embedder"]; device = self.models["device"]
+            face_info = detect_faces(image, mtcnn, facenet, device)
+            obj_feats = detect_objects(img_path, yolo, resnet_object, preprocess, device)
+            img_feat = np.array(image_feature(image, resnet, preprocess, device), dtype=np.float32)
+            art_embed = embedder([segmented_context]).cpu().numpy()
+            features = {
+                "image_feature": img_feat,
+                "face_embeddings": np.array(face_info.get("embeddings", []), dtype=np.float32) if face_info.get("embeddings") is not None and len(face_info.get("embeddings")) else np.zeros((1, 512), dtype=np.float32),
+                "face_detect_probs": np.array(face_info.get("detect_probs", []), dtype=np.float32) if face_info.get("detect_probs") else np.zeros((1,), dtype=np.float32),
+                "face_n_faces": np.array(face_info.get("n_faces", 0), dtype=np.int32),
+                "object_features": np.array(obj_feats, dtype=np.float32) if obj_feats else np.zeros((1, 2048), dtype=np.float32),
+                "article_embed": art_embed,
+            }
 
-            if "face_embeddings" in g:
-                faces = self._ensure_float32(g["face_embeddings"][()])
+        except Exception as e:
+            logging.error(f"Index preprocessing: {idx}: {e}")
+
+            img = self._ensure_float32(features["image_feature"][()])
+            obj = self._ensure_float32(features["object_features"][()])
+            art = self._ensure_float32(features["article_embed"][()])
+
+            if "face_embeddings" in features:
+                faces = self._ensure_float32(features["face_embeddings"][()])
             else:
                 faces = np.zeros((0, 512), dtype=np.float32)
 
@@ -220,20 +201,6 @@ class NewsCaptionDataset(Dataset):
                 "article_mask": art_mask,
             }
 
-        except Exception as e:
-            logging.error(f"[{self.split}] H5 read error for id={sid}: {e}")
-            # Safe fallbacks
-            contexts = {
-                "image": torch.zeros((49, 2048), dtype=torch.float32),
-                "image_mask": torch.ones((49,), dtype=torch.bool),
-                "faces": torch.zeros((0, 512), dtype=torch.float32),
-                "faces_mask": torch.ones((0,), dtype=torch.bool),
-                "obj": torch.zeros((0, 2048), dtype=torch.float32),
-                "obj_mask": torch.ones((0,), dtype=torch.bool),
-                "article": torch.zeros((512, 1024), dtype=torch.float32),
-                "article_mask": torch.ones((512,), dtype=torch.bool),
-            }
-
         # Tokenize caption (stay on CPU; move to device later)
         if self.tokenizer is None:
             # Minimal fallback tokenizer to keep pipeline running
@@ -245,12 +212,12 @@ class NewsCaptionDataset(Dataset):
             )[0]
 
         return {
-            "id": sid,
+            "id": idx,
             "image": contexts["image"],  # convenience alias
             "contexts": contexts,
             "caption_ids": caption_ids,
             "caption": caption,
-            "image_path": image_path,
+            "image_path": item["image_path"],
         }
 
     # ---- cleanup ----
@@ -340,179 +307,6 @@ class TransformAndTell(nn.Module):
                 current_token = next_token
         
         return generated
-
-
-# def train_model(config):
-#     """Training pipeline with early stopping"""
-#     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-#     models = setup_models(device, config["vncorenlp_path"])
-
-#     train_loader = DataLoader(
-#         NewsCaptionDataset(config["data_dir"], "train", models),
-#         batch_size=config["batch_size"],
-#         shuffle=True,
-#         num_workers=config["num_workers"],
-#         collate_fn=pad_and_collate,
-#         worker_init_fn=_h5_worker_init_fn,
-#         pin_memory=True if torch.cuda.is_available() else False,
-#     )
-
-#     val_loader = DataLoader(
-#         NewsCaptionDataset(config["data_dir"], "val", models),
-#         batch_size=config["batch_size"],
-#         shuffle=False,
-#         num_workers=config["num_workers"],
-#         collate_fn=pad_and_collate,
-#         worker_init_fn=_h5_worker_init_fn,
-#         pin_memory=True if torch.cuda.is_available() else False,
-#     )
-#     print("DATALOADER LOADED!")
-    
-#     embedder = AdaptiveEmbedding(
-#         vocab_size=config["embedder"]["vocab_size"],
-#         padding_idx=config["embedder"]["padding_idx"],
-#         initial_dim=config["embedder"]["initial_dim"],
-#         factor=config["embedder"]["factor"],
-#         output_dim=config["embedder"]["output_dim"],
-#         cutoff=config["embedder"]["cutoff"],
-#         scale_embeds=True
-#     )
-#     print("EMBEDDERR LOADED!")
-#     model = TransformAndTell(
-#         vocab_size=config["vocab_size"],
-#         embedder=embedder,
-#         decoder_params=config["decoder_params"]
-#     ).to(device)
-#     print("TransformAndTell LOADED!")
-#     # Optimizer and loss
-#     optimizer = torch.optim.Adam(
-#         model.parameters(),
-#         lr=config["lr"],
-#         betas=(0.9, 0.98),
-#         eps=1e-6,
-#         weight_decay=1e-5
-#     )
-#     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
-#     # criterion = nn.CrossEntropyLoss(ignore_index=train_dataset.tokenizer.pad_token_id)
-#     # Initialize AdaptiveSoftmax criterion
-#     criterion = AdaptiveSoftmax(
-#         vocab_size=config["vocab_size"],
-#         input_dim=config["decoder_params"]["decoder_output_dim"],
-#         cutoff=config["decoder_params"]["adaptive_softmax_cutoff"],
-#         factor=config["decoder_params"]["adaptive_softmax_factor"],
-#         dropout=config["decoder_params"]["adaptive_softmax_dropout"],
-#         adaptive_inputs=embedder if config["decoder_params"]["tie_adaptive_weights"] else None,
-#         tie_proj=config["decoder_params"]["tie_adaptive_proj"]
-#     ).to(device)
-#     print("CRITERION LOADED!")
-#     # Early stopper
-#     early_stopper = EarlyStopper(
-#         patience=config.get("early_stopping_patience", 5),
-#         min_delta=config.get("early_stopping_min_delta", 0.01)
-#     )
-#     print("START TRAINING!")
-#     # Training loop with validation
-#     best_val_loss = float('inf')
-#     ce_loss = nn.CrossEntropyLoss(ignore_index=config["decoder_params"]["padding_idx"])
-#     print(f"[DEBUG] num of epoch: {config['epochs']}")
-#     for epoch in range(config["epochs"]):
-#         model.train()
-#         total_tokens = 0
-#         total_loss_val=0
-#         # Training phase
-#         for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}"):
-#             caption_ids = batch["caption_ids"].to(device)
-#             contexts = {k: v.to(device) for k, v in batch["contexts"].items()}
-            
-#             optimizer.zero_grad()
-#             logits, _ = model(caption_ids[:, :-1], contexts)
-            
-#             # Sanitize logits for stability
-#             logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
-#             logits = logits - logits.max(dim=-1, keepdim=True)[0]  # Subtract max for numerical stability
-            
-#             output, new_target = criterion(
-#                 logits.reshape(-1, logits.size(-1)),
-#                 caption_ids[:, 1:].contiguous().view(-1)
-#             )
-            
-#             total_loss = 0
-#             for out, tgt in zip(output, new_target):
-#                 if out is not None and tgt is not None:
-#                     # out: (batch_size, num_classes), tgt: (batch_size,)
-#                     total_loss += ce_loss(out, tgt)
-            
-#             # Normalize loss by number of tokens
-#             num_tokens = (caption_ids[:, 1:] != config["decoder_params"]["padding_idx"]).sum()
-#             normalized_loss = total_loss / num_tokens
-            
-#             # Check for invalid loss before backward
-#             if torch.isnan(normalized_loss) or torch.isinf(normalized_loss):
-#                 print(f"Skipping batch due to invalid loss: {normalized_loss.item()}")
-#                 continue
-            
-#             # Backward pass
-#             normalized_loss.backward()
-#             torch.nn.utils.clip_grad_norm_(model.parameters(), 0.05)  # Stricter clipping
-#             optimizer.step()
-            
-#             total_loss_val += total_loss.item()
-#             total_tokens += num_tokens.item()
-#         avg_loss = total_loss_val / total_tokens if total_tokens > 0 else 0.0
-#         print(f"Epoch {epoch+1}, Train Loss: {avg_loss:.4f}, Train Tokens: {total_tokens}")
-        
-        
-#         # Validation phase
-#         model.eval()
-#         val_loss = 0
-#         val_total_tokens = 0
-#         with torch.no_grad():
-#             for batch in tqdm(val_loader, desc="Validating"):
-#                 caption_ids = batch["caption_ids"].to(device)
-#                 contexts = {k: v.to(device) for k, v in batch["contexts"].items()}
-                
-#                 logits, _ = model(caption_ids[:, :-1], contexts)
-                
-#                 # Sanitize logits for stability
-#                 logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
-#                 logits = logits - logits.max(dim=-1, keepdim=True)[0]  # Subtract max for numerical stability
-                
-#                 output, new_target = criterion(
-#                     logits.reshape(-1, logits.size(-1)),
-#                     caption_ids[:, 1:].contiguous().view(-1)
-#                 )
-                
-                
-#                 # Compute total loss by summing losses for each cluster
-#                 total_loss = 0
-#                 for out, tgt in zip(output, new_target):
-#                     if out is not None and tgt is not None:
-#                         # out: (batch_size, num_classes), tgt: (batch_size,)
-#                         total_loss += ce_loss(out, tgt)
-                
-#                 # Normalize loss by number of tokens
-#                 num_tokens = (caption_ids[:, 1:] != config["decoder_params"]["padding_idx"]).sum()
-#                 normalized_loss = total_loss / num_tokens
-                
-#                 val_loss += total_loss.item()
-#                 val_total_tokens += num_tokens.item()
-        
-#         avg_val_loss = val_loss / len(val_loader) if len(val_loader) > 0 else 0.0
-#         print(f"Epoch {epoch+1}, Val Loss: {avg_val_loss:.4f}, Val Tokens: {val_total_tokens}")
-#         scheduler.step(avg_val_loss)
-#         # Check for early stopping
-#         if early_stopper.early_stop(avg_val_loss):
-#             print(f"Early stopping triggered after {epoch+1} epochs!")
-#             break
-        
-#         # Save best model
-#         if avg_val_loss < best_val_loss:
-#             best_val_loss = avg_val_loss
-#             torch.save(model.state_dict(), 
-#                        os.path.join(config["output_dir"], "best_model.pth"))
-#             print("Saved new best model")
-    
-#     return model, models
 
 def train_model(config):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

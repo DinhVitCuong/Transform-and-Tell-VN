@@ -281,3 +281,627 @@ ValueError: not enough values to unpack (expected 5, got 4)
 2025-09-07 01:27:29,696 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
 2025-09-07 22:07:17,655 - INFO - Loaded data: train
 2025-09-07 22:07:17,655 - INFO - Preprocessing texts for split train
+2025-09-08 00:33:11,269 - ERROR - Error segmenting text: JVM exception occurred: Index 0 out of bounds for length 0 java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 07:45:10,500 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:02,503 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:04,104 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:04,647 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:06,444 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:07,046 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:08,840 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:09,406 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:10,990 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:11,542 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:13,350 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:13,971 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:15,546 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:16,085 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:17,650 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:18,209 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:19,733 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:20,302 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:21,904 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:22,520 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:24,094 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:24,625 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:26,234 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:26,798 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:28,365 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:28,892 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-08 23:23:30,508 - ERROR - Error segmenting text: JVM exception occurred: java.lang.ArrayIndexOutOfBoundsException
+2025-09-09 02:48:57,160 - INFO - DONE NER. Total record to process: 60216
+2025-09-09 03:12:57,770 - INFO - COMPLETE INIT FIRST H5 SHARD train
+2025-09-09 09:46:40,186 - ERROR - ERROR PROCESSING ITEM 9950: Object of type set is not JSON serializable
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 673, in convert_items
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 500, in _write_sample_to_h5
+    image_out: str = None, checkpoint_interval: int = 100):
+  File "/cm/local/apps/python39/lib/python3.9/json/__init__.py", line 234, in dumps
+    return cls(
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 199, in encode
+    chunks = self.iterencode(o, _one_shot=True)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 257, in iterencode
+    return _iterencode(o, 0)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 179, in default
+    raise TypeError(f'Object of type {o.__class__.__name__} '
+TypeError: Object of type set is not JSON serializable
+2025-09-09 13:25:18,068 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000028740.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000028740.jpg'
+2025-09-09 13:25:18,069 - ERROR - ERROR PROCESSING ITEM 13222: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-09 13:25:18,070 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000028741.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000028741.jpg'
+2025-09-09 13:25:18,070 - ERROR - ERROR PROCESSING ITEM 13223: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-09 13:25:18,070 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000028742.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000028742.jpg'
+2025-09-09 13:25:18,070 - ERROR - ERROR PROCESSING ITEM 13224: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-09 13:30:36,889 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000029005.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000029005.jpg'
+2025-09-09 13:30:36,889 - ERROR - ERROR PROCESSING ITEM 13347: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-09 20:03:35,799 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000035873.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000035873.jpg'
+2025-09-09 20:03:35,831 - ERROR - ERROR PROCESSING ITEM 15541: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-09 20:14:38,706 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000036031.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000036031.jpg'
+2025-09-09 20:14:38,716 - ERROR - ERROR PROCESSING ITEM 15636: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-09 22:18:53,089 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000037122.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000037122.jpg'
+2025-09-09 22:18:53,106 - ERROR - ERROR PROCESSING ITEM 16272: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-09 23:37:18,583 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000040730.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000040730.jpg'
+2025-09-09 23:37:18,595 - ERROR - ERROR PROCESSING ITEM 17012: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-10 09:04:02,648 - ERROR - ERROR PROCESSING ITEM 20975: Object of type set is not JSON serializable
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 673, in convert_items
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 500, in _write_sample_to_h5
+    image_out: str = None, checkpoint_interval: int = 100):
+  File "/cm/local/apps/python39/lib/python3.9/json/__init__.py", line 234, in dumps
+    return cls(
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 199, in encode
+    chunks = self.iterencode(o, _one_shot=True)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 257, in iterencode
+    return _iterencode(o, 0)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 179, in default
+    raise TypeError(f'Object of type {o.__class__.__name__} '
+TypeError: Object of type set is not JSON serializable
+2025-09-10 11:32:26,723 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000052593.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000052593.jpg'
+2025-09-10 11:32:26,735 - ERROR - ERROR PROCESSING ITEM 22261: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-10 11:42:44,279 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000053173.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000053173.jpg'
+2025-09-10 11:42:44,279 - ERROR - ERROR PROCESSING ITEM 22422: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-10 17:05:25,964 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000058889.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000058889.jpg'
+2025-09-10 17:05:25,985 - ERROR - ERROR PROCESSING ITEM 25130: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-10 18:08:16,535 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000059929.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000059929.jpg'
+2025-09-10 18:08:16,536 - ERROR - ERROR PROCESSING ITEM 25663: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-10 22:12:58,401 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000066097.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000066097.jpg'
+2025-09-10 22:12:58,418 - ERROR - ERROR PROCESSING ITEM 28525: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-10 23:07:07,125 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000075483.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000075483.jpg'
+2025-09-10 23:07:07,148 - ERROR - ERROR PROCESSING ITEM 33302: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-10 23:37:02,821 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000083405.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000083405.jpg'
+2025-09-10 23:37:02,841 - ERROR - ERROR PROCESSING ITEM 36348: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 00:43:30,415 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000098479.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000098479.jpg'
+2025-09-11 00:43:30,434 - ERROR - ERROR PROCESSING ITEM 42992: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 01:11:52,404 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000102960.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000102960.jpg'
+2025-09-11 01:11:52,418 - ERROR - ERROR PROCESSING ITEM 44751: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 01:11:52,426 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000102961.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000102961.jpg'
+2025-09-11 01:11:52,426 - ERROR - ERROR PROCESSING ITEM 44752: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 01:11:52,438 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000102962.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000102962.jpg'
+2025-09-11 01:11:52,438 - ERROR - ERROR PROCESSING ITEM 44753: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 01:11:52,444 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000102963.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000102963.jpg'
+2025-09-11 01:11:52,444 - ERROR - ERROR PROCESSING ITEM 44754: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 01:11:52,445 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000102964.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000102964.jpg'
+2025-09-11 01:11:52,445 - ERROR - ERROR PROCESSING ITEM 44755: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 01:11:52,446 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000102965.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000102965.jpg'
+2025-09-11 01:11:52,446 - ERROR - ERROR PROCESSING ITEM 44756: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 05:32:09,852 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000116721.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000116721.jpg'
+2025-09-11 05:32:09,864 - ERROR - ERROR PROCESSING ITEM 50782: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 05:32:50,080 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000116772.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000116772.jpg'
+2025-09-11 05:32:50,080 - ERROR - ERROR PROCESSING ITEM 50797: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 05:32:50,089 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000116773.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000116773.jpg'
+2025-09-11 05:32:50,089 - ERROR - ERROR PROCESSING ITEM 50798: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 05:33:21,052 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000116809.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000116809.jpg'
+2025-09-11 05:33:21,052 - ERROR - ERROR PROCESSING ITEM 50810: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 05:33:25,669 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000116821.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000116821.jpg'
+2025-09-11 05:33:25,669 - ERROR - ERROR PROCESSING ITEM 50815: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 05:33:26,702 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000116823.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000116823.jpg'
+2025-09-11 05:33:26,703 - ERROR - ERROR PROCESSING ITEM 50817: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 05:33:59,280 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000116836.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000116836.jpg'
+2025-09-11 05:33:59,280 - ERROR - ERROR PROCESSING ITEM 50825: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 05:33:59,280 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000116840.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000116840.jpg'
+2025-09-11 05:33:59,280 - ERROR - ERROR PROCESSING ITEM 50826: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 05:34:46,491 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000116895.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000116895.jpg'
+2025-09-11 05:34:46,492 - ERROR - ERROR PROCESSING ITEM 50842: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 05:35:39,818 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000116925.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000116925.jpg'
+2025-09-11 05:35:39,818 - ERROR - ERROR PROCESSING ITEM 50857: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 05:35:39,819 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000116927.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000116927.jpg'
+2025-09-11 05:35:39,819 - ERROR - ERROR PROCESSING ITEM 50858: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 05:36:31,117 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000116944.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000116944.jpg'
+2025-09-11 05:36:31,118 - ERROR - ERROR PROCESSING ITEM 50873: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 06:49:35,890 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000120241.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000120241.jpg'
+2025-09-11 06:49:35,904 - ERROR - ERROR PROCESSING ITEM 52166: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 06:50:01,320 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000120383.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000120383.jpg'
+2025-09-11 06:50:01,320 - ERROR - ERROR PROCESSING ITEM 52182: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 06:50:02,589 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000120399.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000120399.jpg'
+2025-09-11 06:50:02,589 - ERROR - ERROR PROCESSING ITEM 52188: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 06:50:02,874 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000120402.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000120402.jpg'
+2025-09-11 06:50:02,874 - ERROR - ERROR PROCESSING ITEM 52190: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 06:50:05,522 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000120422.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000120422.jpg'
+2025-09-11 06:50:05,522 - ERROR - ERROR PROCESSING ITEM 52200: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 07:28:34,829 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000125396.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000125396.jpg'
+2025-09-11 07:28:34,829 - ERROR - ERROR PROCESSING ITEM 53784: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 07:28:50,440 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000125411.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000125411.jpg'
+2025-09-11 07:28:50,440 - ERROR - ERROR PROCESSING ITEM 53796: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 08:31:05,477 - ERROR - ERROR PROCESSING ITEM 55367: Object of type set is not JSON serializable
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 673, in convert_items
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 500, in _write_sample_to_h5
+    image_out: str = None, checkpoint_interval: int = 100):
+  File "/cm/local/apps/python39/lib/python3.9/json/__init__.py", line 234, in dumps
+    return cls(
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 199, in encode
+    chunks = self.iterencode(o, _one_shot=True)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 257, in iterencode
+    return _iterencode(o, 0)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 179, in default
+    raise TypeError(f'Object of type {o.__class__.__name__} '
+TypeError: Object of type set is not JSON serializable
+2025-09-11 08:31:07,230 - ERROR - ERROR PROCESSING ITEM 55368: Object of type set is not JSON serializable
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 673, in convert_items
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 500, in _write_sample_to_h5
+    image_out: str = None, checkpoint_interval: int = 100):
+  File "/cm/local/apps/python39/lib/python3.9/json/__init__.py", line 234, in dumps
+    return cls(
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 199, in encode
+    chunks = self.iterencode(o, _one_shot=True)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 257, in iterencode
+    return _iterencode(o, 0)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 179, in default
+    raise TypeError(f'Object of type {o.__class__.__name__} '
+TypeError: Object of type set is not JSON serializable
+2025-09-11 08:31:08,207 - ERROR - ERROR PROCESSING ITEM 55369: Object of type set is not JSON serializable
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 673, in convert_items
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 500, in _write_sample_to_h5
+    image_out: str = None, checkpoint_interval: int = 100):
+  File "/cm/local/apps/python39/lib/python3.9/json/__init__.py", line 234, in dumps
+    return cls(
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 199, in encode
+    chunks = self.iterencode(o, _one_shot=True)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 257, in iterencode
+    return _iterencode(o, 0)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 179, in default
+    raise TypeError(f'Object of type {o.__class__.__name__} '
+TypeError: Object of type set is not JSON serializable
+2025-09-11 08:31:09,097 - ERROR - ERROR PROCESSING ITEM 55370: Object of type set is not JSON serializable
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 673, in convert_items
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 500, in _write_sample_to_h5
+    image_out: str = None, checkpoint_interval: int = 100):
+  File "/cm/local/apps/python39/lib/python3.9/json/__init__.py", line 234, in dumps
+    return cls(
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 199, in encode
+    chunks = self.iterencode(o, _one_shot=True)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 257, in iterencode
+    return _iterencode(o, 0)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 179, in default
+    raise TypeError(f'Object of type {o.__class__.__name__} '
+TypeError: Object of type set is not JSON serializable
+2025-09-11 08:31:10,234 - ERROR - ERROR PROCESSING ITEM 55371: Object of type set is not JSON serializable
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 673, in convert_items
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 500, in _write_sample_to_h5
+    image_out: str = None, checkpoint_interval: int = 100):
+  File "/cm/local/apps/python39/lib/python3.9/json/__init__.py", line 234, in dumps
+    return cls(
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 199, in encode
+    chunks = self.iterencode(o, _one_shot=True)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 257, in iterencode
+    return _iterencode(o, 0)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 179, in default
+    raise TypeError(f'Object of type {o.__class__.__name__} '
+TypeError: Object of type set is not JSON serializable
+2025-09-11 08:31:11,344 - ERROR - ERROR PROCESSING ITEM 55372: Object of type set is not JSON serializable
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 673, in convert_items
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 500, in _write_sample_to_h5
+    image_out: str = None, checkpoint_interval: int = 100):
+  File "/cm/local/apps/python39/lib/python3.9/json/__init__.py", line 234, in dumps
+    return cls(
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 199, in encode
+    chunks = self.iterencode(o, _one_shot=True)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 257, in iterencode
+    return _iterencode(o, 0)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 179, in default
+    raise TypeError(f'Object of type {o.__class__.__name__} '
+TypeError: Object of type set is not JSON serializable
+2025-09-11 08:31:13,172 - ERROR - ERROR PROCESSING ITEM 55373: Object of type set is not JSON serializable
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 673, in convert_items
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 500, in _write_sample_to_h5
+    image_out: str = None, checkpoint_interval: int = 100):
+  File "/cm/local/apps/python39/lib/python3.9/json/__init__.py", line 234, in dumps
+    return cls(
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 199, in encode
+    chunks = self.iterencode(o, _one_shot=True)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 257, in iterencode
+    return _iterencode(o, 0)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 179, in default
+    raise TypeError(f'Object of type {o.__class__.__name__} '
+TypeError: Object of type set is not JSON serializable
+2025-09-11 08:31:14,777 - ERROR - ERROR PROCESSING ITEM 55374: Object of type set is not JSON serializable
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 673, in convert_items
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 500, in _write_sample_to_h5
+    image_out: str = None, checkpoint_interval: int = 100):
+  File "/cm/local/apps/python39/lib/python3.9/json/__init__.py", line 234, in dumps
+    return cls(
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 199, in encode
+    chunks = self.iterencode(o, _one_shot=True)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 257, in iterencode
+    return _iterencode(o, 0)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 179, in default
+    raise TypeError(f'Object of type {o.__class__.__name__} '
+TypeError: Object of type set is not JSON serializable
+2025-09-11 08:31:16,416 - ERROR - ERROR PROCESSING ITEM 55375: Object of type set is not JSON serializable
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 673, in convert_items
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 500, in _write_sample_to_h5
+    image_out: str = None, checkpoint_interval: int = 100):
+  File "/cm/local/apps/python39/lib/python3.9/json/__init__.py", line 234, in dumps
+    return cls(
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 199, in encode
+    chunks = self.iterencode(o, _one_shot=True)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 257, in iterencode
+    return _iterencode(o, 0)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 179, in default
+    raise TypeError(f'Object of type {o.__class__.__name__} '
+TypeError: Object of type set is not JSON serializable
+2025-09-11 08:31:18,370 - ERROR - ERROR PROCESSING ITEM 55376: Object of type set is not JSON serializable
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 673, in convert_items
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 500, in _write_sample_to_h5
+    image_out: str = None, checkpoint_interval: int = 100):
+  File "/cm/local/apps/python39/lib/python3.9/json/__init__.py", line 234, in dumps
+    return cls(
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 199, in encode
+    chunks = self.iterencode(o, _one_shot=True)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 257, in iterencode
+    return _iterencode(o, 0)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 179, in default
+    raise TypeError(f'Object of type {o.__class__.__name__} '
+TypeError: Object of type set is not JSON serializable
+2025-09-11 08:31:22,412 - ERROR - ERROR PROCESSING ITEM 55377: Object of type set is not JSON serializable
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 673, in convert_items
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 500, in _write_sample_to_h5
+    image_out: str = None, checkpoint_interval: int = 100):
+  File "/cm/local/apps/python39/lib/python3.9/json/__init__.py", line 234, in dumps
+    return cls(
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 199, in encode
+    chunks = self.iterencode(o, _one_shot=True)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 257, in iterencode
+    return _iterencode(o, 0)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 179, in default
+    raise TypeError(f'Object of type {o.__class__.__name__} '
+TypeError: Object of type set is not JSON serializable
+2025-09-11 08:31:23,244 - ERROR - ERROR PROCESSING ITEM 55378: Object of type set is not JSON serializable
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 673, in convert_items
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 500, in _write_sample_to_h5
+    image_out: str = None, checkpoint_interval: int = 100):
+  File "/cm/local/apps/python39/lib/python3.9/json/__init__.py", line 234, in dumps
+    return cls(
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 199, in encode
+    chunks = self.iterencode(o, _one_shot=True)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 257, in iterencode
+    return _iterencode(o, 0)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 179, in default
+    raise TypeError(f'Object of type {o.__class__.__name__} '
+TypeError: Object of type set is not JSON serializable
+2025-09-11 08:31:26,690 - ERROR - ERROR PROCESSING ITEM 55379: Object of type set is not JSON serializable
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 673, in convert_items
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 500, in _write_sample_to_h5
+    image_out: str = None, checkpoint_interval: int = 100):
+  File "/cm/local/apps/python39/lib/python3.9/json/__init__.py", line 234, in dumps
+    return cls(
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 199, in encode
+    chunks = self.iterencode(o, _one_shot=True)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 257, in iterencode
+    return _iterencode(o, 0)
+  File "/cm/local/apps/python39/lib/python3.9/json/encoder.py", line 179, in default
+    raise TypeError(f'Object of type {o.__class__.__name__} '
+TypeError: Object of type set is not JSON serializable
+2025-09-11 09:24:02,497 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131006.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131006.jpg'
+2025-09-11 09:24:02,521 - ERROR - ERROR PROCESSING ITEM 56383: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:24:56,170 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131080.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131080.jpg'
+2025-09-11 09:24:56,170 - ERROR - ERROR PROCESSING ITEM 56413: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:25:50,056 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131125.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131125.jpg'
+2025-09-11 09:25:50,056 - ERROR - ERROR PROCESSING ITEM 56430: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:25:50,057 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131126.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131126.jpg'
+2025-09-11 09:25:50,057 - ERROR - ERROR PROCESSING ITEM 56431: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:25:50,057 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131127.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131127.jpg'
+2025-09-11 09:25:50,057 - ERROR - ERROR PROCESSING ITEM 56432: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:26:23,482 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131140.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131140.jpg'
+2025-09-11 09:26:23,482 - ERROR - ERROR PROCESSING ITEM 56441: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:26:23,490 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131141.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131141.jpg'
+2025-09-11 09:26:23,491 - ERROR - ERROR PROCESSING ITEM 56442: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:27:41,127 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131192.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131192.jpg'
+2025-09-11 09:27:41,127 - ERROR - ERROR PROCESSING ITEM 56475: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:27:44,110 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131197.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131197.jpg'
+2025-09-11 09:27:44,110 - ERROR - ERROR PROCESSING ITEM 56478: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:29:07,749 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131285.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131285.jpg'
+2025-09-11 09:29:07,749 - ERROR - ERROR PROCESSING ITEM 56508: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:29:23,395 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131292.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131292.jpg'
+2025-09-11 09:29:23,395 - ERROR - ERROR PROCESSING ITEM 56514: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:29:29,813 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131297.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131297.jpg'
+2025-09-11 09:29:29,813 - ERROR - ERROR PROCESSING ITEM 56517: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:29:46,476 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131331.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131331.jpg'
+2025-09-11 09:29:46,476 - ERROR - ERROR PROCESSING ITEM 56540: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:30:21,531 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131366.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131366.jpg'
+2025-09-11 09:30:21,531 - ERROR - ERROR PROCESSING ITEM 56561: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:30:27,712 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131383.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131383.jpg'
+2025-09-11 09:30:27,712 - ERROR - ERROR PROCESSING ITEM 56566: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:30:29,893 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131386.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131386.jpg'
+2025-09-11 09:30:29,893 - ERROR - ERROR PROCESSING ITEM 56569: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:30:29,896 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131387.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131387.jpg'
+2025-09-11 09:30:29,896 - ERROR - ERROR PROCESSING ITEM 56570: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:30:29,905 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131389.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131389.jpg'
+2025-09-11 09:30:29,905 - ERROR - ERROR PROCESSING ITEM 56571: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:30:29,908 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131391.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131391.jpg'
+2025-09-11 09:30:29,908 - ERROR - ERROR PROCESSING ITEM 56572: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:30:29,908 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131392.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131392.jpg'
+2025-09-11 09:30:29,908 - ERROR - ERROR PROCESSING ITEM 56573: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:30:40,273 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131402.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131402.jpg'
+2025-09-11 09:30:40,273 - ERROR - ERROR PROCESSING ITEM 56581: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:30:47,613 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131411.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131411.jpg'
+2025-09-11 09:30:47,614 - ERROR - ERROR PROCESSING ITEM 56585: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:30:56,399 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131417.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131417.jpg'
+2025-09-11 09:30:56,399 - ERROR - ERROR PROCESSING ITEM 56591: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:30:59,579 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131420.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131420.jpg'
+2025-09-11 09:30:59,579 - ERROR - ERROR PROCESSING ITEM 56594: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:30:59,579 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131423.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131423.jpg'
+2025-09-11 09:30:59,579 - ERROR - ERROR PROCESSING ITEM 56595: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 09:31:06,710 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000131430.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000131430.jpg'
+2025-09-11 09:31:06,710 - ERROR - ERROR PROCESSING ITEM 56601: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 13:25:54,968 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000144951.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000144951.jpg'
+2025-09-11 13:25:54,969 - ERROR - ERROR PROCESSING ITEM 62119: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 13:36:18,950 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000145808.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000145808.jpg'
+2025-09-11 13:36:18,953 - ERROR - ERROR PROCESSING ITEM 62488: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 13:36:18,955 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000145810.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000145810.jpg'
+2025-09-11 13:36:18,955 - ERROR - ERROR PROCESSING ITEM 62489: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 13:40:33,156 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000146207.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000146207.jpg'
+2025-09-11 13:40:33,157 - ERROR - ERROR PROCESSING ITEM 62703: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 13:40:43,190 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000146217.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000146217.jpg'
+2025-09-11 13:40:43,190 - ERROR - ERROR PROCESSING ITEM 62711: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 13:41:14,154 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000146264.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000146264.jpg'
+2025-09-11 13:41:14,154 - ERROR - ERROR PROCESSING ITEM 62736: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 13:41:18,160 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000146269.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000146269.jpg'
+2025-09-11 13:41:18,160 - ERROR - ERROR PROCESSING ITEM 62740: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 13:48:14,989 - ERROR - Load image error /data2/npl/ICEK/Wikipedia/images_resized/0000147011.jpg: [Errno 2] No such file or directory: '/data2/npl/ICEK/Wikipedia/images_resized/0000147011.jpg'
+2025-09-11 13:48:15,002 - ERROR - ERROR PROCESSING ITEM 63015: not enough values to unpack (expected 5, got 4)
+Traceback (most recent call last):
+  File "/data2/npl/ICEK/TnT/Transform-and-Tell-VN/models/encoder.py", line 666, in convert_items
+ValueError: not enough values to unpack (expected 5, got 4)
+2025-09-11 14:41:10,188 - INFO - [train] saved: samples=60126, articles=60126, objects=60126
+2025-09-30 20:39:22,034 - INFO - Loaded data: demo10
+2025-09-30 20:39:22,034 - INFO - Preprocessing texts for split demo10
+2025-09-30 20:39:29,082 - INFO - DONE TEXT SPLIT. Total record to process: 11
+2025-09-30 20:45:18,140 - INFO - Loaded data: demo10
+2025-09-30 20:45:18,140 - INFO - Preprocessing texts for split demo10
+2025-09-30 20:45:23,534 - INFO - DONE TEXT SPLIT. Total record to process: 11
+2025-09-30 20:48:12,577 - INFO - COMPLETE INIT FIRST H5 SHARD demo10
+2025-09-30 20:48:29,050 - INFO - [demo10] saved: samples=11, articles=11, objects=11

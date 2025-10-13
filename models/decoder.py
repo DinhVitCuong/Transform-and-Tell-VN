@@ -24,7 +24,7 @@ class DynamicConvFacesObjectsDecoder(Decoder):
                  decoder_normalize_before, attention_dropout, decoder_ffn_embed_dim,
                  decoder_kernel_size_list, adaptive_softmax_cutoff=None,
                  tie_adaptive_weights=False, adaptive_softmax_dropout=0,
-                 tie_adaptive_proj=False, adaptive_softmax_factor=1, decoder_layers=4,
+                 tie_adaptive_proj=False, adaptive_softmax_factor=0, decoder_layers=6,
                  final_norm=True, padding_idx=0, swap=False):
         super().__init__()
         self.weight_dropout = weight_dropout  # Already float
@@ -50,7 +50,7 @@ class DynamicConvFacesObjectsDecoder(Decoder):
         self.layers.extend([
             DynamicConvDecoderLayer(embed_dim, decoder_conv_dim, decoder_glu,
                                     decoder_conv_type, weight_softmax, decoder_attention_heads,
-                                    weight_dropout, relu_dropout, input_dropout,
+                                    weight_dropout, dropout, relu_dropout, input_dropout,
                                     decoder_normalize_before, attention_dropout, decoder_ffn_embed_dim,
                                     swap, kernel_size=decoder_kernel_size_list[i])
             for i in range(decoder_layers)
@@ -88,18 +88,28 @@ class DynamicConvFacesObjectsDecoder(Decoder):
         if self.normalize:
             self.layer_norm = nn.LayerNorm(embed_dim)
 
+        # WEIGHTED SUM FOR ARTICLE:
+        self.weights = nn.Parameter(torch.randn(25)) #25 layer
+        
+
     def forward(self, prev_target, contexts, incremental_state=None,
                 use_layers=None, **kwargs):
 
         # DEBUG
-        # for key in ['image','article','faces','obj']:
-        #     feat = contexts[key]
-        #     mask = contexts[f"{key}_mask"]
-        #     print(f"{key:>8} feat: {tuple(feat.shape)}, mask: {tuple(mask.shape)}")
+        for key in ['image','article','faces','obj']:
+            feat = contexts[key]
+            mask = contexts[f"{key}_mask"]
+            print(f"[DEBUG]: {key:>8} feat: {tuple(feat.shape)}, mask: {tuple(mask.shape)}")
 
         # Embed tokens
         X = self.embedder(prev_target)
         # X = self.embedder(prev_target, incremental_state=incremental_state)
+
+        # WEIGHTED SUM FOR ARTICLE:
+        alphas = F.softmax(self.weights, dim=0)
+        alphas = alphas.view(1, -1, 1, 1)
+        contexts['article'] = (contexts['article'] * alphas).sum(dim=1)
+
 
         if self.project_in_dim is not None:
             X = self.project_in_dim(X)
@@ -182,7 +192,7 @@ class DynamicConvFacesObjectsDecoder(Decoder):
 class DynamicConvDecoderLayer(nn.TransformerDecoderLayer):
     def __init__(self, decoder_embed_dim, decoder_conv_dim, decoder_glu,
                  decoder_conv_type, weight_softmax, decoder_attention_heads,
-                 weight_dropout, relu_dropout, input_dropout,
+                 weight_dropout, dropout, relu_dropout, input_dropout,
                  decoder_normalize_before, attention_dropout, decoder_ffn_embed_dim,
                  swap, kernel_size=0):
         super().__init__(d_model=1024,nhead=8)
@@ -207,7 +217,7 @@ class DynamicConvDecoderLayer(nn.TransformerDecoderLayer):
         else:
             raise NotImplementedError
         self.linear2 = GehringLinear(self.conv_dim, self.embed_dim)
-        self.dropout_prob = 0.1
+        self.dropout_prob = dropout
         self.relu_dropout = relu_dropout
         self.input_dropout = input_dropout
         self.normalize_before = decoder_normalize_before
@@ -222,7 +232,7 @@ class DynamicConvDecoderLayer(nn.TransformerDecoderLayer):
             self.embed_dim, decoder_attention_heads, kdim=C, vdim=C,
             dropout=attention_dropout)
         self.context_attn_lns['image'] = nn.LayerNorm(self.embed_dim)
-        self.layer_weights = nn.Parameter(torch.ones(25) / 25)  # 25 layers for phoBERT-large
+
         self.context_attns['article'] = MultiHeadAttention(
             self.embed_dim, decoder_attention_heads, kdim=1024, vdim=1024,
             dropout=attention_dropout)

@@ -21,7 +21,7 @@ For each item this script will:
 * copy the image to ``--image-out`` (if provided)
 * detect faces with **MTCNN** and extract **FaceNet** embeddings with max faces = 4
 * detect objects using **YoloV8** and encode them with **ResNet152** We filter out objects with a confidence less than 0.3 and select up to 64 objects
-* run **VnCoreNLP** to obtain ``caption_ner`` and ``context_ner``
+* run **VnCoreNLP** to for segment
 * extract a global image feature with **ResNet152**
 * embed the article text using a **RoBERTa** model (PhoBERT for Vietnamese)
 
@@ -71,82 +71,6 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
-# class RobertaEmbedder(torch.nn.Module):
-#     def __init__(self, model, tokenizer, segmenter, device):
-#         super().__init__()
-#         self.model = model
-#         self.tokenizer = tokenizer
-#         self.segmenter = segmenter
-#         self.device = device
-#         self.num_layers = model.config.num_hidden_layers + 1
-#         self.hidden_size = model.config.hidden_size
-#         self.max_position_embeddings = model.config.max_position_embeddings  # Usually 512
-#         self.layer_weights = torch.nn.Parameter(torch.ones(self.num_layers) / self.num_layers)
-        
-#         # Pre-calculate maximum token length per sentence
-#         self.max_tokens_per_sentence = self.max_position_embeddings - 2  # Reserve for special tokens
-
-#     def forward(self, text: str) -> torch.Tensor:
-#         """Process text with absolute safety against position embedding overflow"""
-#         # Clean and segment text
-#         sentences = re.split(r'(?<=[\.!?])\s+', text.strip())
-#         if not sentences:
-#             return torch.zeros(1, self.hidden_size, device=self.device)
-
-#         # Process each sentence with strict length control
-#         embeddings = []
-#         current_length = 0
-        
-#         for sent in sentences:
-#             # Skip if we've reached max length
-#             if current_length >= self.max_position_embeddings:
-#                 break
-#             try:
-#                 input = self.segmenter.word_segment(sent)[0]
-#             except:
-#                 input = sent    
-#             # Calculate safe token limit
-#             remaining = self.max_position_embeddings - current_length
-#             max_length = min(remaining, self.max_tokens_per_sentence)
-            
-#             # Tokenize with safety margins
-#             toks = self.tokenizer(
-#                 input,
-#                 truncation=True,
-#                 max_length=max_length,
-#                 return_tensors="pt",
-#                 add_special_tokens=True
-#             ).to(self.device)
-            
-#             # Skip empty tokenizations
-#             if toks.input_ids.size(1) == 0:
-#                 continue
-                
-#             # Manually create SAFE position IDs
-#             seq_len = toks.input_ids.size(1)
-#             position_ids = torch.arange(0, seq_len, dtype=torch.long, device=self.device)
-#             position_ids = position_ids.clamp(max=self.max_position_embeddings-1)
-#             toks['position_ids'] = position_ids.unsqueeze(0)
-            
-#             # Get hidden states
-#             with torch.no_grad():
-#                 outputs = self.model(**toks, output_hidden_states=True)
-            
-#             # Weighted sum of layers
-#             hidden_states = torch.stack(outputs.hidden_states)  # [layers, 1, seq_len, hidden]
-#             weights = torch.softmax(self.layer_weights, dim=0).view(-1, 1, 1, 1)
-#             weighted_embedding = (weights * hidden_states).sum(dim=0).squeeze(0)  # [seq_len, hidden]
-            
-#             embeddings.append(weighted_embedding)
-#             current_length += seq_len  # Track total tokens
-
-#         if not embeddings:
-#             return torch.zeros(1, self.hidden_size, device=self.device)
-        
-#         # Combine and truncate
-#         full_embedding = torch.cat(embeddings, dim=0)[:self.max_position_embeddings]
-#         return full_embedding
-
 class RobertaEmbedder(torch.nn.Module):
     def __init__(self, model, tokenizer, device):
         super().__init__()
@@ -158,19 +82,18 @@ class RobertaEmbedder(torch.nn.Module):
         self.max_position_embeddings = model.config.max_position_embeddings  # Usually 512
         self.max_tokens_per_sentence = self.max_position_embeddings - 2  # Reserve for special tokens
 
-    def forward(self, texts: List[str], segmented_texts: List[str]) -> torch.Tensor:
+    def forward(self, segmented_texts: List[str]) -> torch.Tensor:
         """Process a list of pre-segmented texts, returning all PhoBERT hidden states"""
         embeddings = []
-        for text, segmented in zip(texts, segmented_texts):
-            sentences = re.split(r'(?<=[\.!?])\s+', text.strip())
+        for segmented in segmented_texts:
             seg_sentences = segmented.split(' <SEP> ') if segmented else []
-            if not sentences or not seg_sentences:
+            if not seg_sentences:
                 embeddings.append(torch.zeros(self.num_layers, 1, self.hidden_size, device=self.device))
                 continue
 
             sent_embeddings = []
             current_length = 0
-            for sent, seg_sent in zip(sentences, seg_sentences):
+            for seg_sent in seg_sentences:
                 if current_length >= self.max_position_embeddings:
                     break
                 input = seg_sent.strip()
@@ -204,17 +127,17 @@ class RobertaEmbedder(torch.nn.Module):
                 embeddings.append(full_embedding)
         # Pad to max length
         max_len = max(e.size(1) for e in embeddings)
-        padded_embeddings = torch.zeros(len(texts), self.num_layers, max_len, self.hidden_size, device=self.device)
+        padded_embeddings = torch.zeros(len(embeddings), self.num_layers, max_len, self.hidden_size, device=self.device)
         for i, emb in enumerate(embeddings):
             padded_embeddings[i, :, :emb.size(1), :] = emb
-        return padded_embeddings  # [batch_size, num_layers, seq_len, hidden_size]
+        return padded_embeddings  # [sentences, num_layers, seq_len, hidden_size]
 
 def setup_models(device: torch.device, vncorenlp_path="/data2/npl/ICEK/VnCoreNLP"):
     py_vncorenlp.download_model(save_dir=vncorenlp_path)
     vncore = py_vncorenlp.VnCoreNLP(
-        annotators=["wseg", "pos", "ner", "parse"],
+        annotators=["wseg"],
         save_dir=vncorenlp_path,
-        max_heap_size='-Xmx10g'
+        max_heap_size='-Xmx15g'
     )
     print("LOADED VNCORENLP!")
     
@@ -233,7 +156,7 @@ def setup_models(device: torch.device, vncorenlp_path="/data2/npl/ICEK/VnCoreNLP
 
     yolo = YOLO("yolov8m.pt")  # tải weight tự động lần đầu
     yolo.fuse()                # fuse model for speed
-    print("LOADED YOLOv5!")
+    print("LOADED YOLOv8!")
     
     phoBERTlocal = "/data2/npl/ICEK/TnT/phoBERT_large/phobert-large"
     tokenizer = AutoTokenizer.from_pretrained(phoBERTlocal, use_fast=False, local_files_only=True)
@@ -277,45 +200,6 @@ def segment_text(text: str, model) -> str:
             logging.error(f"Error segmenting text: {e}")
             segmented_sentences.append(sent)
     return " <SEP> ".join(segmented_sentences)
-
-def extract_entities(text: str,
-                     model
-                    ) -> Dict[str, List[str]]:
-    """
-    Chia text thành từng câu, chạy NER trên mỗi câu bằng VnCoreNLP,
-    rồi gộp kết quả (loại trùng). Nếu một câu lỗi hoặc không có entity,
-    nó sẽ được bỏ qua.
-    """
-    label_mapping = {
-        "PER":  "PERSON", "B-PER":  "PERSON", "I-PER":  "PERSON",
-        "ORG":  "ORG",    "B-ORG":  "ORG",    "I-ORG":  "ORG",
-        "LOC":  "LOC",    "B-LOC":  "LOC",    "I-LOC":  "LOC",
-        "GPE":  "GPE",    "B-GPE":  "GPE",    "I-GPE":  "GPE",
-        "NORP": "NORP",   "B-NORP": "NORP",   "I-NORP": "NORP",
-        "MISC": "MISC",   "B-MISC": "MISC",   "I-MISC": "MISC",
-    }
-    entities = defaultdict(set)
-    sentences = re.split(r'(?<=[\.!?])\s+', text.strip())
-    if not sentences:
-        return {}
-    for sent in sentences:
-        sent = sent.strip()
-        if not sent:
-            continue
-        try:
-            annotated_text = model.annotate_text(sent)
-        except Exception as e:
-            print(f"Lỗi khi annotating text: {e}")
-            return entities
-
-        for subsent in annotated_text:
-
-            for word in annotated_text[subsent]:
-                ent_type = label_mapping.get(word.get('nerLabel', ''), '')
-                ent_text = word.get('wordForm', '').strip()
-                if ent_type and ent_text:
-                    entities[ent_type].add(' '.join(ent_text.split('_')).strip("•"))
-    return {typ: sorted(vals) for typ, vals in entities.items()}
 
 def detect_faces(img: Image.Image, mtcnn: MTCNN, facenet: InceptionResnetV1, device: torch.device, max_faces=4) -> dict:
     with torch.no_grad():
@@ -415,7 +299,7 @@ def load_checkpoint(out_dir: str, split: str) -> Tuple[List[dict], Dict[str, dic
             objects = json.load(f)
     return samples, articles, objects
 
-def process_item(sid: str, item: dict, segmented_context: str, cap_ner: Dict[str, List[str]], ctx_ner: Dict[str, List[str]],
+def process_item(sid: str, item: dict, segmented_context: str,
                  models: dict, image_out: str, split: str):
     sample_id = str(sid)
 
@@ -447,7 +331,7 @@ def process_item(sid: str, item: dict, segmented_context: str, cap_ner: Dict[str
     face_info = detect_faces(image, mtcnn, facenet, device)
     obj_feats = detect_objects(img_path, yolo, resnet_object, preprocess, device)
     img_feat = np.array(image_feature(image, resnet, preprocess, device), dtype=np.float32)
-    art_embed = embedder([item.get("caption", "")], [segmented_context])[0].cpu().numpy()
+    art_embed = embedder([segmented_context]).cpu().numpy()
 
     features = {
         "image_feature": img_feat,
@@ -456,17 +340,13 @@ def process_item(sid: str, item: dict, segmented_context: str, cap_ner: Dict[str
         "face_n_faces": np.array(face_info.get("n_faces", 0), dtype=np.int32),
         "object_features": np.array(obj_feats, dtype=np.float32) if obj_feats else np.zeros((1, 2048), dtype=np.float32),
         "article_embed": art_embed,
-        "caption_ner": cap_ner,
-        "context_ner": ctx_ner,
     }
 
     article = {
         "_id": sample_id,
-        "context": " ".join(item.get("context", [])),
+        "context": " ".join(item.get("paragraphs", [])),
         "images": [item.get("caption", "")],
-        "web_url": "",
-        "caption_ner": [cap_ner],
-        "context_ner": [ctx_ner],
+        "web_url": ""
     }
 
     sample = {
@@ -496,29 +376,41 @@ def _dump_index_json(output_dir: str, split: str, index: dict):
     os.replace(tmp, idx_path)
 
 
+def _write_sample_to_h5(root: h5py.Group, sid: str, features: dict):
+    grp = root.require_group(sid)
+    # Clear existing datasets if any
+    for name in list(grp.keys()):
+        del grp[name]
+    # Write datasets (uncompressed)
+    grp.create_dataset("image_feature", data=features["image_feature"])
+    grp.create_dataset("object_features", data=features["object_features"])
+    grp.create_dataset("article_embed", data=features["article_embed"])
+    grp.create_dataset("face_embeddings", data=features["face_embeddings"])
+    grp.create_dataset("face_detect_probs", data=features["face_detect_probs"])
+    # Attribute
+    grp.attrs["face_n_faces"] = features["face_n_faces"]
+
 def convert_items(items: Dict[str, dict], split: str, models: dict, output_dir: str,
                   image_out: str = None, checkpoint_interval: int = 100):
     samples_all, articles_all, objects_all = [], {}, []
 
     vncore = models["vncore"]
 
-    # 1) Preprocess text (segmentation + NER) first
+    # 1) Preprocess text (segmentation) first
     items_to_process = []
     logging.info(f"Preprocessing texts for split {split}")
-    for sid, item in tqdm(list(items.items()), desc=f"Pre-NER {split}"):
-        context = " ".join(item.get("context", []))
+    for sid, item in tqdm(list(items.items()), desc=f"Split {split}"):
+        context = " ".join(item.get("paragraphs", []))
         caption = item.get("caption", "")
         try:
             segmented_context = segment_text(context, vncore)
-            cap_ner = extract_entities(caption, vncore)
-            ctx_ner = extract_entities(context, vncore)
-            items_to_process.append((sid, item, segmented_context, cap_ner, ctx_ner))
+            items_to_process.append((sid, item, segmented_context))
         except Exception as e:
             logging.error(f"Text preprocess error {sid}: {e}")
             continue
 
     total = len(items_to_process)
-    logging.info(f"DONE NER. Total record to process: {total}")
+    logging.info(f"DONE TEXT SPLIT. Total record to process: {total}")
 
     # 2) Shard setup
     need_shard = total >= SHARD_THRESHOLD
@@ -531,10 +423,10 @@ def convert_items(items: Dict[str, dict], split: str, models: dict, output_dir: 
     logging.info(f"COMPLETE INIT FIRST H5 SHARD {split}")
     # 3) Iterate and write
     processed = 0
-    for sid, item, segmented_context, cap_ner, ctx_ner in tqdm(items_to_process, desc=f"Encode+Save {split}"):
+    for sid, item, segmented_context in tqdm(items_to_process, desc=f"Encode+Save {split}"):
         try:
             sample_id, features, sample, article, object_data = process_item(
-                sid, item, segmented_context, cap_ner, ctx_ner, models, image_out, split
+                sid, item, segmented_context, models, image_out, split
             )
             if features is None:
                 continue
@@ -600,14 +492,15 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     models = setup_models(device, args.vncorenlp)
-    # for split in ["demo10"]:  # DEBUG
-    #     split_data = load_split(os.path.join(args.data_dir, f"{split}.json"))
-    #     logging.info("Loaded data")
-    #     print("Loaded_data")
-    #     samples, articles, objects = convert_items(split_data, split, models, args.output_dir, args.image_out, args.checkpoint_interval)
-    #     save_checkpoint(samples, articles, objects, args.output_dir, split)
-    #     logging.info(f"[{split}] saved: samples={len(samples)}, articles={len(articles)}, objects={len(objects)}")
-    for split in ["train" ]:
+    for split in ["demo10" ]:
+        split_data = load_split(os.path.join(args.data_dir, f"{split}.json"))
+        logging.info(f"Loaded data: {split}")
+        print(f"Loaded data: {split}")
+        samples, articles, objects = convert_items(split_data, split, models, args.output_dir, args.image_out, args.checkpoint_interval)
+        save_checkpoint(samples, articles, objects, args.output_dir, split)
+        logging.info(f"[{split}] saved: samples={len(samples)}, articles={len(articles)}, objects={len(objects)}")
+        print(f"[{split}] saved: samples={len(samples)}, articles={len(articles)}, objects={len(objects)}")
+    for split in ["test","val","train" ]:
         split_data = load_split(os.path.join(args.data_dir, f"{split}.json"))
         logging.info(f"Loaded data: {split}")
         print(f"Loaded data: {split}")

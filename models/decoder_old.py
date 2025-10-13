@@ -5,22 +5,18 @@
 # the root directory of this source tree. An additional grant of patent rights
 # can be found in the PATENTS file in the same directory.
 
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from allennlp.modules.text_field_embedders import TextFieldEmbedder
 from tell.modules import (AdaptiveSoftmax, DynamicConv1dTBC, GehringLinear,
                           LightweightConv1dTBC, MultiHeadAttention)
 from tell.modules.token_embedders import AdaptiveEmbedding
-from tell.utils import eval_str_list, fill_with_neg_inf, softmax
-
+# from tell.utils import eval_str_list, fill_with_neg_inf, softmax
+from .modules import (eval_str_list, fill_with_neg_inf, softmax)
 from .decoder_base import Decoder, DecoderLayer
 
-
-@Decoder.register('dynamic_conv_decoder_faces_objects')
 class DynamicConvFacesObjectsDecoder(Decoder):
-    def __init__(self, vocab, embedder: TextFieldEmbedder, max_target_positions, dropout,
+    def __init__(self, vocab_size, embedder, max_target_positions, dropout,
                  share_decoder_input_output_embed,
                  decoder_output_dim, decoder_conv_dim, decoder_glu,
                  decoder_conv_type, weight_softmax, decoder_attention_heads,
@@ -28,20 +24,21 @@ class DynamicConvFacesObjectsDecoder(Decoder):
                  decoder_normalize_before, attention_dropout, decoder_ffn_embed_dim,
                  decoder_kernel_size_list, adaptive_softmax_cutoff=None,
                  tie_adaptive_weights=False, adaptive_softmax_dropout=0,
-                 tie_adaptive_proj=False, adaptive_softmax_factor=0, decoder_layers=6,
-                 final_norm=True, padding_idx=0, namespace='target_tokens',
-                 vocab_size=None, section_attn=False, swap=False):
+                 tie_adaptive_proj=False, adaptive_softmax_factor=1, decoder_layers=4,
+                 final_norm=True, padding_idx=0, swap=False):
         super().__init__()
-        self.vocab = vocab
-        vocab_size = vocab_size or vocab.get_vocab_size(namespace)
-        self.dropout = dropout
+        self.weight_dropout = weight_dropout  # Already float
+        self.relu_dropout = relu_dropout      # Already float
+        self.input_dropout = input_dropout
+        self.vocab_size = vocab_size
+        self.dropout_prob = dropout
         self.share_input_output_embed = share_decoder_input_output_embed
 
         input_embed_dim = embedder.get_output_dim()
         embed_dim = input_embed_dim
         output_embed_dim = input_embed_dim
 
-        padding_idx = padding_idx
+        self.padding_idx = padding_idx
         self.max_target_positions = max_target_positions
 
         self.embedder = embedder
@@ -53,10 +50,9 @@ class DynamicConvFacesObjectsDecoder(Decoder):
         self.layers.extend([
             DynamicConvDecoderLayer(embed_dim, decoder_conv_dim, decoder_glu,
                                     decoder_conv_type, weight_softmax, decoder_attention_heads,
-                                    weight_dropout, dropout, relu_dropout, input_dropout,
+                                    weight_dropout, relu_dropout, input_dropout,
                                     decoder_normalize_before, attention_dropout, decoder_ffn_embed_dim,
-                                    swap,
-                                    kernel_size=decoder_kernel_size_list[i])
+                                    swap, kernel_size=decoder_kernel_size_list[i])
             for i in range(decoder_layers)
         ])
 
@@ -94,16 +90,21 @@ class DynamicConvFacesObjectsDecoder(Decoder):
 
     def forward(self, prev_target, contexts, incremental_state=None,
                 use_layers=None, **kwargs):
-        # embed tokens and positions
-        X = self.embedder(prev_target, incremental_state=incremental_state)
 
-        # if incremental_state is not None:
-        #     X = X[:, -1:]
+        # DEBUG
+        for key in ['image','article','faces','obj']:
+            feat = contexts[key]
+            mask = contexts[f"{key}_mask"]
+            print(f"[DEBUG]: {key:>8} feat: {tuple(feat.shape)}, mask: {tuple(mask.shape)}")
+
+        # Embed tokens
+        X = self.embedder(prev_target)
+        # X = self.embedder(prev_target, incremental_state=incremental_state)
 
         if self.project_in_dim is not None:
             X = self.project_in_dim(X)
 
-        X = F.dropout(X, p=self.dropout, training=self.training)
+        X = F.dropout(X, p=self.dropout_prob, training=self.training)
 
         # B x T x C -> T x B x C
         X = X.transpose(0, 1)
@@ -111,7 +112,7 @@ class DynamicConvFacesObjectsDecoder(Decoder):
 
         inner_states = [X]
 
-        # decoder layers
+        # Decoder layers
         for i, layer in enumerate(self.layers):
             if not use_layers or i in use_layers:
                 X, attn = layer(
@@ -132,10 +133,10 @@ class DynamicConvFacesObjectsDecoder(Decoder):
             X = self.project_out_dim(X)
 
         if self.adaptive_softmax is None:
-            # project back to size of vocabulary
+            # Project back to vocabulary size
             if self.share_input_output_embed:
                 X = F.linear(
-                    X, self.embedder.token_embedder_bert.word_embeddings.weight)
+                    X, self.embedder.weight)
             else:
                 X = F.linear(X, self.embed_out)
 
@@ -144,11 +145,9 @@ class DynamicConvFacesObjectsDecoder(Decoder):
     def max_positions(self):
         """Maximum output length supported by the decoder."""
         return self.max_target_positions
-        # return min(self.max_target_positions, self.embedder.max_positions())
 
     def buffered_future_mask(self, tensor):
         dim = tensor.size(0)
-        # pylint: disable=access-member-before-definition
         if not hasattr(self, '_future_mask') or self._future_mask is None or self._future_mask.device != tensor.device:
             self._future_mask = torch.triu(
                 fill_with_neg_inf(tensor.new(dim, dim)), 1)
@@ -180,14 +179,13 @@ class DynamicConvFacesObjectsDecoder(Decoder):
                 incremental_state[key] = incremental_state[key][:, active_idx]
 
 
-@DecoderLayer.register('dynamic_conv_faces_objects')
-class DynamicConvDecoderLayer(DecoderLayer):
+class DynamicConvDecoderLayer(nn.TransformerDecoderLayer):
     def __init__(self, decoder_embed_dim, decoder_conv_dim, decoder_glu,
                  decoder_conv_type, weight_softmax, decoder_attention_heads,
-                 weight_dropout, dropout, relu_dropout, input_dropout,
+                 weight_dropout, relu_dropout, input_dropout,
                  decoder_normalize_before, attention_dropout, decoder_ffn_embed_dim,
                  swap, kernel_size=0):
-        super().__init__()
+        super().__init__(d_model=1024,nhead=8)
         self.embed_dim = decoder_embed_dim
         self.conv_dim = decoder_conv_dim
         if decoder_glu:
@@ -209,8 +207,7 @@ class DynamicConvDecoderLayer(DecoderLayer):
         else:
             raise NotImplementedError
         self.linear2 = GehringLinear(self.conv_dim, self.embed_dim)
-
-        self.dropout = dropout
+        self.dropout_prob = 0.1
         self.relu_dropout = relu_dropout
         self.input_dropout = input_dropout
         self.normalize_before = decoder_normalize_before
@@ -225,7 +222,7 @@ class DynamicConvDecoderLayer(DecoderLayer):
             self.embed_dim, decoder_attention_heads, kdim=C, vdim=C,
             dropout=attention_dropout)
         self.context_attn_lns['image'] = nn.LayerNorm(self.embed_dim)
-
+        self.layer_weights = nn.Parameter(torch.ones(25) / 25)  # 25 layers for phoBERT-large
         self.context_attns['article'] = MultiHeadAttention(
             self.embed_dim, decoder_attention_heads, kdim=1024, vdim=1024,
             dropout=attention_dropout)
@@ -253,6 +250,7 @@ class DynamicConvDecoderLayer(DecoderLayer):
         self.swap = swap
 
     def forward(self, X, contexts, incremental_state):
+
         residual = X
         X = self.maybe_layer_norm(self.conv_layer_norm, X, before=True)
         X = F.dropout(X, p=self.input_dropout, training=self.training)
@@ -261,7 +259,7 @@ class DynamicConvDecoderLayer(DecoderLayer):
             X = self.act(X)
         X = self.conv(X, incremental_state=incremental_state)
         X = self.linear2(X)
-        X = F.dropout(X, p=self.dropout, training=self.training)
+        X = F.dropout(X, p=self.dropout_prob, training=self.training)
         X = residual + X
         X = self.maybe_layer_norm(self.conv_layer_norm, X, after=True)
 
@@ -280,7 +278,7 @@ class DynamicConvDecoderLayer(DecoderLayer):
             incremental_state=None,
             static_kv=True,
             need_weights=(not self.training and self.need_attn))
-        X_image = F.dropout(X_image, p=self.dropout, training=self.training)
+        X_image = F.dropout(X_image, p=self.dropout_prob, training=self.training)
         X_image = residual + X_image
         X_image = self.maybe_layer_norm(
             self.context_attn_lns['image'], X_image, after=True)
@@ -292,6 +290,11 @@ class DynamicConvDecoderLayer(DecoderLayer):
         residual = X
         X_article = self.maybe_layer_norm(
             self.context_attn_lns['article'], X, before=True)
+        # Apply layer weights to combine PhoBERT hidden states
+        article_hidden = contexts['article']
+        weights = F.softmax(self.layer_weights, dim=0).view(-1, 1, 1, 1)
+        article_weighted = (weights * article_hidden).sum(dim=0)
+        contexts['article'] = article_weighted
         X_article, attn = self.context_attns['article'](
             query=X_article,
             key=contexts['article'],
@@ -300,7 +303,7 @@ class DynamicConvDecoderLayer(DecoderLayer):
             incremental_state=None,
             static_kv=True,
             need_weights=(not self.training and self.need_attn))
-        X_article = F.dropout(X_article, p=self.dropout,
+        X_article = F.dropout(X_article, p=self.dropout_prob,
                               training=self.training)
         X_article = residual + X_article
         X_article = self.maybe_layer_norm(
@@ -321,7 +324,7 @@ class DynamicConvDecoderLayer(DecoderLayer):
             incremental_state=None,
             static_kv=True,
             need_weights=(not self.training and self.need_attn))
-        X_faces = F.dropout(X_faces, p=self.dropout,
+        X_faces = F.dropout(X_faces, p=self.dropout_prob,
                             training=self.training)
         X_faces = residual + X_faces
         X_faces = self.maybe_layer_norm(
@@ -342,7 +345,7 @@ class DynamicConvDecoderLayer(DecoderLayer):
             incremental_state=None,
             static_kv=True,
             need_weights=(not self.training and self.need_attn))
-        X_objs = F.dropout(X_objs, p=self.dropout,
+        X_objs = F.dropout(X_objs, p=self.dropout_prob,
                            training=self.training)
         X_objs = residual + X_objs
         X_objs = self.maybe_layer_norm(
@@ -359,7 +362,7 @@ class DynamicConvDecoderLayer(DecoderLayer):
         X = F.relu(self.fc1(X))
         X = F.dropout(X, p=self.relu_dropout, training=self.training)
         X = self.fc2(X)
-        X = F.dropout(X, p=self.dropout, training=self.training)
+        X = F.dropout(X, p=self.dropout_prob, training=self.training)
         X = residual + X
         X = self.maybe_layer_norm(self.final_layer_norm, X, after=True)
         return X, attns
@@ -376,4 +379,4 @@ class DynamicConvDecoderLayer(DecoderLayer):
 
     def extra_repr(self):
         return 'dropout={}, relu_dropout={}, input_dropout={}, normalize_before={}'.format(
-            self.dropout, self.relu_dropout, self.input_dropout, self.normalize_before)
+            self.dropout_prob, self.relu_dropout, self.input_dropout, self.normalize_before)
