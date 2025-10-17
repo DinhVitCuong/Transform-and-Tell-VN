@@ -95,12 +95,6 @@ class DynamicConvFacesObjectsDecoder(Decoder):
     def forward(self, prev_target, contexts, incremental_state=None,
                 use_layers=None, **kwargs):
 
-        # DEBUG
-        for key in ['image','article','faces','obj']:
-            feat = contexts[key]
-            mask = contexts[f"{key}_mask"]
-            print(f"[DEBUG]: {key:>8} feat: {tuple(feat.shape)}, mask: {tuple(mask.shape)}")
-
         # Embed tokens
         X = self.embedder(prev_target)
         # X = self.embedder(prev_target, incremental_state=incremental_state)
@@ -137,7 +131,11 @@ class DynamicConvFacesObjectsDecoder(Decoder):
         contexts["faces"] = contexts["faces"].transpose(0, 1).contiguous()            # [S,B,H]
         contexts["obj"] = contexts["obj"].transpose(0, 1).contiguous()            # [S,B,H]
         # (Keep mask as [B,S]; no change)
-
+        # DEBUG
+        # for key in ['image','article','faces','obj']:
+        #     feat = contexts[key]
+        #     mask = contexts[f"{key}_mask"]
+        #     print(f"[DEBUG]: {key:>8} feat: {tuple(feat.shape)}, mask: {tuple(mask.shape)}")
         
         if self.project_in_dim is not None:
             X = self.project_in_dim(X)
@@ -328,11 +326,6 @@ class DynamicConvDecoderLayer(nn.TransformerDecoderLayer):
         residual = X
         X_article = self.maybe_layer_norm(
             self.context_attn_lns['article'], X, before=True)
-        # Apply layer weights to combine PhoBERT hidden states
-        article_hidden = contexts['article']
-        weights = F.softmax(self.layer_weights, dim=0).view(-1, 1, 1, 1)
-        article_weighted = (weights * article_hidden).sum(dim=0)
-        contexts['article'] = article_weighted
         X_article, attn = self.context_attns['article'](
             query=X_article,
             key=contexts['article'],
