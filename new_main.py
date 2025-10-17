@@ -79,7 +79,7 @@ def pad_and_collate(batch):
         # -> [B,64] (bool)
         "obj_mask": pad_context_list([it["contexts"]["obj_mask"] for it in batch], padding_value=True),
 
-        # -> [B,L,S,H] (e.g., [B,25,512,H])  — không combine
+        # -> [B,L,S,H] (e.g., [B,25,1024,H])  — không combine
         "article": pad_context_list([it["contexts"]["article"] for it in batch]),
         # -> [B,S] (bool, True=PAD)
         "article_mask": pad_context_list([it["contexts"]["article_mask"] for it in batch], padding_value=True),
@@ -87,6 +87,11 @@ def pad_and_collate(batch):
     
     for k in ("image_mask", "faces_mask", "obj_mask", "article_mask"):
         contexts[k] = contexts[k].to(torch.bool)
+
+    print(f"[DEBUG]: art_feat {contexts['article']}, art_mask: {contexts['article_mask']}")
+    print(f"[DEBUG]: img_feat {contexts['image']}, img_mask: {contexts['image_mask']}")
+    print(f"[DEBUG]: obj_feat {contexts['obj']}, obj_mask: {contexts['obj_mask']}")
+    print(f"[DEBUG]: face_feat {contexts['faces']}, face_mask: {contexts['faces_mask']}")
 
     caption_ids = pad_sequence(caption_ids, batch_first=True, padding_value=0)
     return {
@@ -98,7 +103,7 @@ def pad_and_collate(batch):
     }
 
 class NewsCaptionDataset(Dataset):
-    def __init__(self, data_dir, split, models, max_length=512):
+    def __init__(self, data_dir, split, models, max_length=256):
         super().__init__()
         self.data_dir     = data_dir
         self.split        = split
@@ -127,7 +132,6 @@ class NewsCaptionDataset(Dataset):
         self.ids = list(range(len(self.items)))
 
         # Setup model for feature extraction
-        self.embedder = self.models["embedder"]
         self.device = self.models["device"]
         self.mtcnn = self.models["mtcnn"]
         self.facenet = self.models["facenet"]
@@ -184,7 +188,6 @@ class NewsCaptionDataset(Dataset):
         art_feats  = art_feats_b[0].contiguous()                    
         art_mask = (~attn_mask_b[0].bool()).contiguous()
         # art_feats, art_mask = embedder(segmented_context).cpu().numpy()
-        
         contexts = {
             "image": img_feats,
             "image_mask": img_mask,
@@ -599,7 +602,7 @@ if __name__ == "__main__":
             "scale_embeds": True
         },
         "decoder_params": {
-            "max_target_positions": 512,
+            "max_target_positions": 256,
             "dropout": 0.1,
             "share_decoder_input_output_embed": True,
             "decoder_output_dim": 1024,
