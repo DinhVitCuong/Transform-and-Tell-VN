@@ -89,7 +89,8 @@ class DynamicConvFacesObjectsDecoder(Decoder):
             self.layer_norm = nn.LayerNorm(embed_dim)
 
         # WEIGHTED SUM FOR ARTICLE:
-        self.weights = nn.Parameter(torch.randn(25)) #25 layer
+        self.article_layer_alpha = nn.Parameter(torch.zeros(25))  # stable init; softmax later
+        self.expected_article_layers = 25  # RoBERTa/PhoBERT-large
         
 
     def forward(self, prev_target, contexts, incremental_state=None,
@@ -106,11 +107,36 @@ class DynamicConvFacesObjectsDecoder(Decoder):
         # X = self.embedder(prev_target, incremental_state=incremental_state)
 
         # WEIGHTED SUM FOR ARTICLE:
-        alphas = F.softmax(self.weights, dim=0)
-        alphas = alphas.view(1, -1, 1, 1)
-        contexts['article'] = (contexts['article'] * alphas).sum(dim=1)
+        article = contexts["article"]
+        if article.dim() == 4:
+            # Accept [B, L, S, H] or [L, B, S, H]; normalize to [B, L, S, H]
+            B_from_target = prev_target.size(0)
+            if article.size(0) == B_from_target:
+                # [B, L, S, H]
+                B, L, S, H = article.shape
+            elif article.size(1) == B_from_target:
+                # [L, B, S, H] -> [B, L, S, H]
+                L, B, S, H = article.shape
+                article = article.permute(1, 0, 2, 3).contiguous()
+            else:
+                raise ValueError(f"Unexpected article shape {tuple(article.shape)}")
 
+            # Use as many alphas as layers we have (handles non-large models too)
+            L_used = L
+            alphas = torch.softmax(self.article_layer_alpha[:L_used], dim=0)  # [L]
+            alphas = alphas.view(1, L_used, 1, 1)                             # [1,L,1,1]
+            article = (article[:, :L_used] * alphas).sum(dim=1)               # [B,S,H]
+        elif article.dim() == 3:
+            # Already [B, S, H]
+            B, S, H = article.shape
+        else:
+            raise ValueError(f"contexts['article'] must be 3D/4D, got {article.dim()}D")
 
+        # MultiHeadAttention in TnT expects keys/values as TBC: [S, B, C]
+        contexts["article"] = article.transpose(0, 1).contiguous()            # [S,B,H]
+        # (Keep mask as [B,S]; no change)
+
+        
         if self.project_in_dim is not None:
             X = self.project_in_dim(X)
 

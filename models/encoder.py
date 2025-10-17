@@ -57,6 +57,7 @@ import re
 import logging
 import h5py
 import uuid
+from typing import Optional, Tuple, List
 
 Image.MAX_IMAGE_PIXELS = None
 SHARD_THRESHOLD = 3000
@@ -71,68 +72,235 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
+# class RobertaEmbedder(torch.nn.Module):
+#     def __init__(self, model, tokenizer, device, target_len: int = 512, expected_layers: int = 25):
+#         super().__init__()
+#         self.model = model
+#         self.tokenizer = tokenizer
+#         self.device = device
+#         self.hidden_size = model.config.hidden_size
+#         self.num_layers = model.config.num_hidden_layers + 1  # Include input embedding layer
+#         self.max_position_embeddings = model.config.max_position_embeddings  # Usually 512
+#         self.max_tokens_per_sentence = self.max_position_embeddings - 2  # Reserve for special tokens
+#         self.target_len = int(target_len)            # force T = 512
+#         self.expected_layers = int(expected_layers)  # force L = 25
+
+#     def _pack_one(self, text: str) -> Tuple[List[int], List[int]]:
+#         """
+#         Build a single sequence: <BOS> + as many content tokens as fit + <EOS>, then pad to target_len.
+#         Returns (input_ids, attention_mask) as Python lists (len == target_len).
+#         """
+#         # split on your custom separator, drop empties
+#         segs = [s.strip() for s in (text or "").split(" <SEP> ") if s and s.strip()]
+
+#         # reserve 2 slots for BOS/EOS -> content budget
+#         budget = max(self.target_len - 2, 0)
+#         ids = [self.bos_id]
+#         consumed = 0
+
+#         # add tokens segment-by-segment, never exceeding budget
+#         for seg in segs:
+#             # tokenize WITHOUT special tokens
+#             seg_ids = self.tokenizer.encode(seg, add_special_tokens=False)
+#             if not seg_ids:
+#                 continue
+#             remaining = budget - consumed
+#             if remaining <= 0:
+#                 break
+#             if len(seg_ids) <= remaining:
+#                 ids.extend(seg_ids)
+#                 consumed += len(seg_ids)
+#             else:
+#                 ids.extend(seg_ids[:remaining])
+#                 consumed += remaining
+#                 break
+
+#         ids.append(self.eos_id)
+
+#         # pad to target_len
+#         attn = [1] * len(ids)
+#         if len(ids) < self.target_len:
+#             pad_len = self.target_len - len(ids)
+#             ids.extend([self.pad_id] * pad_len)
+#             attn.extend([0] * pad_len)
+#         elif len(ids) > self.target_len:
+#             # extremely rare, but guard anyway (keep BOS + content up to T-1, then EOS)
+#             ids = ids[: self.target_len - 1] + [self.eos_id]
+#             attn = [1] * self.target_len
+
+#         return ids, attn
+
+    # def forward(self, segmented_texts: List[str]) -> torch.Tensor:
+    #     """Process a list of pre-segmented texts, returning all PhoBERT hidden states"""
+    #     embeddings = []
+    #     for segmented in segmented_texts:
+    #         seg_sentences = segmented.split(' <SEP> ') if segmented else []
+    #         if not seg_sentences:
+    #             embeddings.append(torch.zeros(self.num_layers, 1, self.hidden_size, device=self.device))
+    #             continue
+
+    #         sent_embeddings = []
+    #         current_length = 0
+    #         for seg_sent in seg_sentences:
+    #             if current_length >= self.max_position_embeddings:
+    #                 break
+    #             input = seg_sent.strip()
+    #             if not input:
+    #                 continue
+    #             remaining = self.max_position_embeddings - current_length
+    #             max_length = min(remaining, self.max_tokens_per_sentence)
+    #             toks = self.tokenizer(
+    #                 input,
+    #                 truncation=True,
+    #                 max_length=max_length,
+    #                 return_tensors="pt",
+    #                 add_special_tokens=True
+    #             ).to(self.device)
+    #             if toks.input_ids.size(1) == 0:
+    #                 continue
+    #             seq_len = toks.input_ids.size(1)
+    #             position_ids = torch.arange(0, seq_len, dtype=torch.long, device=self.device)
+    #             position_ids = position_ids.clamp(max=self.max_position_embeddings-1)
+    #             toks['position_ids'] = position_ids.unsqueeze(0)
+    #             with torch.no_grad():
+    #                 outputs = self.model(**toks, output_hidden_states=True)
+    #             hidden_states = torch.stack(outputs.hidden_states)  # [num_layers, 1, seq_len, hidden]
+    #             sent_embeddings.append(hidden_states.squeeze(1))  # [num_layers, seq_len, hidden]
+    #             current_length += seq_len
+    #         if not sent_embeddings:
+    #             embeddings.append(torch.zeros(self.num_layers, 1, self.hidden_size, device=self.device))
+    #         else:
+    #             # Fix: Concatenate directly along sequence dimension
+    #             full_embedding = torch.cat(sent_embeddings, dim=1)[:, :self.max_position_embeddings, :]
+    #             embeddings.append(full_embedding)
+    #     # Pad to max length
+    #     max_len = max(e.size(1) for e in embeddings)
+    #     padded_embeddings = torch.zeros(len(embeddings), self.num_layers, max_len, self.hidden_size, device=self.device)
+    #     for i, emb in enumerate(embeddings):
+    #         padded_embeddings[i, :, :emb.size(1), :] = emb
+    #     return padded_embeddings  # [sentences, num_layers, seq_len, hidden_size]
+
+
 class RobertaEmbedder(torch.nn.Module):
-    def __init__(self, model, tokenizer, device):
+
+    def __init__(self, model, tokenizer, device, expected_layers: int = 25, target_len: int = 512):
         super().__init__()
-        self.model = model
-        self.tokenizer = tokenizer
+        self.model = model.eval()
+        self.tok = tokenizer
         self.device = device
-        self.hidden_size = model.config.hidden_size
-        self.num_layers = model.config.num_hidden_layers + 1  # Include input embedding layer
-        self.max_position_embeddings = model.config.max_position_embeddings  # Usually 512
-        self.max_tokens_per_sentence = self.max_position_embeddings - 2  # Reserve for special tokens
+        self.expected_layers = int(expected_layers)   # 25 for *-large, 13 for *-base
+        self.target_len = int(min(target_len, int(getattr(model.config, "max_position_embeddings", 512))))
 
-    def forward(self, segmented_texts: List[str]) -> torch.Tensor:
-        """Process a list of pre-segmented texts, returning all PhoBERT hidden states"""
-        embeddings = []
-        for segmented in segmented_texts:
-            seg_sentences = segmented.split(' <SEP> ') if segmented else []
-            if not seg_sentences:
-                embeddings.append(torch.zeros(self.num_layers, 1, self.hidden_size, device=self.device))
-                continue
+        # quick sanity
+        h = int(getattr(self.model.config, "hidden_size", 0))
+        if h <= 0:
+            raise ValueError("model.config.hidden_size is invalid; load a proper (PhoBERT/RoBERTa) checkpoint.")
 
-            sent_embeddings = []
-            current_length = 0
-            for seg_sent in seg_sentences:
-                if current_length >= self.max_position_embeddings:
-                    break
-                input = seg_sent.strip()
-                if not input:
-                    continue
-                remaining = self.max_position_embeddings - current_length
-                max_length = min(remaining, self.max_tokens_per_sentence)
-                toks = self.tokenizer(
-                    input,
-                    truncation=True,
-                    max_length=max_length,
-                    return_tensors="pt",
-                    add_special_tokens=True
-                ).to(self.device)
-                if toks.input_ids.size(1) == 0:
-                    continue
-                seq_len = toks.input_ids.size(1)
-                position_ids = torch.arange(0, seq_len, dtype=torch.long, device=self.device)
-                position_ids = position_ids.clamp(max=self.max_position_embeddings-1)
-                toks['position_ids'] = position_ids.unsqueeze(0)
-                with torch.no_grad():
-                    outputs = self.model(**toks, output_hidden_states=True)
-                hidden_states = torch.stack(outputs.hidden_states)  # [num_layers, 1, seq_len, hidden]
-                sent_embeddings.append(hidden_states.squeeze(1))  # [num_layers, seq_len, hidden]
-                current_length += seq_len
-            if not sent_embeddings:
-                embeddings.append(torch.zeros(self.num_layers, 1, self.hidden_size, device=self.device))
-            else:
-                # Fix: Concatenate directly along sequence dimension
-                full_embedding = torch.cat(sent_embeddings, dim=1)[:, :self.max_position_embeddings, :]
-                embeddings.append(full_embedding)
-        # Pad to max length
-        max_len = max(e.size(1) for e in embeddings)
-        padded_embeddings = torch.zeros(len(embeddings), self.num_layers, max_len, self.hidden_size, device=self.device)
-        for i, emb in enumerate(embeddings):
-            padded_embeddings[i, :, :emb.size(1), :] = emb
-        return padded_embeddings  # [sentences, num_layers, seq_len, hidden_size]
+    @torch.no_grad()
+    def forward(self, texts: List[str]) -> Tuple[torch.Tensor, torch.Tensor]:
+        import torch
+        if not isinstance(texts, (list, tuple)):
+            texts = [texts]
+
+        # Replace custom separator and add a leading space for RoBERTa-style tokenization
+        proc = []
+        for t in texts:
+            t = (t or "").replace(" <SEP> ", " ")
+            if not t.startswith(" "):
+                t = " " + t
+            proc.append(t)
+
+        batch = self.tok(
+            proc,
+            padding="max_length",
+            truncation=True,
+            max_length=self.target_len,   # ≤ model.config.max_position_embeddings (512)
+            return_tensors="pt",
+            add_special_tokens=True,
+        )
+
+        input_ids = batch["input_ids"].to(self.device).long()
+        attn_mask = batch["attention_mask"].to(self.device).long()  # keep 0/1 int
+
+        # Hard guard (keeps CUDA from device-side assert later)
+        vocab = int(self.model.config.vocab_size)
+        mn, mx = int(input_ids.min().item()), int(input_ids.max().item())
+        if mn < 0 or mx >= vocab:
+            raise ValueError(f"OOR token id: min={mn}, max={mx}, vocab_size={vocab}")
+
+        out = self.model(
+            input_ids=input_ids,
+            attention_mask=attn_mask,
+            output_hidden_states=True,
+        )
+
+        hs = torch.stack(list(out.hidden_states), dim=1).contiguous()  # [B, L_actual, 512, H]
+        L_actual = hs.size(1)
+        if L_actual < self.expected_layers:
+            pad = self.expected_layers - L_actual
+            hs = torch.cat([hs, hs.new_zeros(hs.size(0), pad, hs.size(2), hs.size(3))], dim=1)
+        elif L_actual > self.expected_layers:
+            hs = hs[:, -self.expected_layers:, :, :]
+
+        attn_mask_bool = attn_mask.to(torch.bool)  # True=token, False=pad (flip later if needed)
+        return hs, attn_mask_bool
+
+# def setup_models(device: torch.device, vncorenlp_path="/data2/npl/ICEK/VnCoreNLP"):
+#     py_vncorenlp.download_model(save_dir=vncorenlp_path)
+#     vncore = py_vncorenlp.VnCoreNLP(
+#         annotators=["wseg"],
+#         save_dir=vncorenlp_path,
+#         max_heap_size='-Xmx15g'
+#     )
+#     print("LOADED VNCORENLP!")
+    
+#     # Face detection + embedding
+#     mtcnn = MTCNN(keep_all=True, device=device)
+#     facenet = InceptionResnetV1(pretrained="vggface2").eval().to(device)
+#     print("LOADED FaceNet!")
+
+#     # Global image feature
+#     weights = ResNet152_Weights.IMAGENET1K_V1 
+#     base = resnet152(weights=weights).eval().to(device)
+#     resnet = nn.Sequential(*list(base.children())[:-2]).eval().to(device)
+    
+#     resnet_object = nn.Sequential(*list(base.children())[:-1]).eval().to(device)
+#     print("LOADED ResNet152!")
+
+#     yolo = YOLO("yolov8m.pt")  # tải weight tự động lần đầu
+#     yolo.fuse()                # fuse model for speed
+#     print("LOADED YOLOv8!")
+    
+#     phoBERTlocal = "/data2/npl/ICEK/TnT/phoBERT_large/phobert-large"
+#     tokenizer = AutoTokenizer.from_pretrained(phoBERTlocal, use_fast=False, local_files_only=True)
+#     roberta     = AutoModel    .from_pretrained(phoBERTlocal, use_safetensors=True, local_files_only=True).to(device).eval()
+#     embedder = RobertaEmbedder(roberta, tokenizer, device).to(device)
+#     print("LOADED phoBERT!")
+#     preprocess = Compose([
+#         ToTensor(),
+#         Normalize(mean=[0.485, 0.456, 0.406],
+#                   std=[0.229, 0.224, 0.225])
+#     ])
+
+#     return {
+#         "vncore": vncore,
+#         "mtcnn": mtcnn,
+#         "facenet": facenet,
+#         "resnet": resnet,
+#         "resnet_object": resnet_object,
+#         "roberta": roberta,
+#         "tokenizer": tokenizer,
+#         "embedder": embedder,
+#         "yolo": yolo,
+#         "preprocess": preprocess,
+#         "device": device,
+#     }
 
 def setup_models(device: torch.device, vncorenlp_path="/data2/npl/ICEK/VnCoreNLP"):
+    # (Optional) make HF strictly local if all files are on disk
+    # os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
+    # --- VnCoreNLP ---
     py_vncorenlp.download_model(save_dir=vncorenlp_path)
     vncore = py_vncorenlp.VnCoreNLP(
         annotators=["wseg"],
@@ -140,29 +308,47 @@ def setup_models(device: torch.device, vncorenlp_path="/data2/npl/ICEK/VnCoreNLP
         max_heap_size='-Xmx15g'
     )
     print("LOADED VNCORENLP!")
-    
-    # Face detection + embedding
-    mtcnn = MTCNN(keep_all=True, device=device)
+
+    # --- Face detection + embedding ---
+    mtcnn = MTCNN(keep_all=True, device=str(device))
     facenet = InceptionResnetV1(pretrained="vggface2").eval().to(device)
     print("LOADED FaceNet!")
 
-    # Global image feature
-    weights = ResNet152_Weights.IMAGENET1K_V1 
+    # --- Global / object image features ---
+    weights = ResNet152_Weights.IMAGENET1K_V1
     base = resnet152(weights=weights).eval().to(device)
     resnet = nn.Sequential(*list(base.children())[:-2]).eval().to(device)
-    
     resnet_object = nn.Sequential(*list(base.children())[:-1]).eval().to(device)
     print("LOADED ResNet152!")
 
-    yolo = YOLO("yolov8m.pt")  # tải weight tự động lần đầu
-    yolo.fuse()                # fuse model for speed
+    # --- YOLOv8 ---
+    yolo = YOLO("yolov8m.pt")
+    yolo.fuse()
     print("LOADED YOLOv8!")
-    
+
+    # --- PhoBERT ---
     phoBERTlocal = "/data2/npl/ICEK/TnT/phoBERT_large/phobert-large"
     tokenizer = AutoTokenizer.from_pretrained(phoBERTlocal, use_fast=False, local_files_only=True)
-    roberta     = AutoModel    .from_pretrained(phoBERTlocal, use_safetensors=True, local_files_only=True).to(device).eval()
+    # DO NOT force safetensors unless files exist
+    roberta   = AutoModel    .from_pretrained(phoBERTlocal, local_files_only=True).eval().to(device)
+
+    # Quick consistency checks (fail fast in Python instead of CUDA assert)
+    assert len(tokenizer) == int(roberta.config.vocab_size), \
+        f"Tokenizer size {len(tokenizer)} != model vocab_size {int(roberta.config.vocab_size)}"
+    assert tokenizer.pad_token_id is not None and tokenizer.pad_token == "<pad>", \
+        "PhoBERT pad token missing/misaligned."
+
+    # (Optional) If you saw SDPA-related dtype issues, prefer math path:
+    try:
+        torch.backends.cuda.enable_flash_sdp(False)
+        torch.backends.cuda.enable_mem_efficient_sdp(False)
+        torch.backends.cuda.enable_math_sdp(True)
+    except Exception:
+        pass
+
     embedder = RobertaEmbedder(roberta, tokenizer, device).to(device)
     print("LOADED phoBERT!")
+
     preprocess = Compose([
         ToTensor(),
         Normalize(mean=[0.485, 0.456, 0.406],
@@ -183,6 +369,7 @@ def setup_models(device: torch.device, vncorenlp_path="/data2/npl/ICEK/VnCoreNLP
         "device": device,
     }
 
+
 def segment_text(text: str, model) -> str:
     """Segment text using VnCoreNLP and join sentences with a separator"""
     sentences = re.split(r'(?<=[\.!?])\s+', text.strip())
@@ -201,68 +388,172 @@ def segment_text(text: str, model) -> str:
             segmented_sentences.append(sent)
     return " <SEP> ".join(segmented_sentences)
 
-def detect_faces(img: Image.Image, mtcnn: MTCNN, facenet: InceptionResnetV1, device: torch.device, max_faces=4) -> dict:
+def _pad_to_len(x: torch.Tensor, target_len: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    x: [S, D] on any device; returns (x_padded [target_len, D], mask [target_len] with True=PAD)
+    If S >= target_len -> truncate and mask all False.
+    """
+    S, D = x.shape
+    if S >= target_len:
+        return x[:target_len], torch.zeros(target_len, dtype=torch.bool, device=x.device)
+    pad = torch.zeros(target_len - S, D, dtype=x.dtype, device=x.device)
+    out = torch.cat([x, pad], dim=0)
+    mask = torch.zeros(target_len, dtype=torch.bool, device=x.device)
+    mask[S:] = True
+    return out, mask
+
+# def detect_faces(img: Image.Image, mtcnn: MTCNN, facenet: InceptionResnetV1, device: torch.device, max_faces=4) -> dict:
+#     with torch.no_grad():
+#         faces, probs = mtcnn(img, return_prob=True)
+#     if faces is None or len(faces) == 0:
+#         return {"n_faces": 0, "embeddings": [], "detect_probs": []}
+#     if isinstance(probs, torch.Tensor):
+#         probs = probs.tolist()
+#     facelist = sorted(zip(faces, probs), key=lambda x: x[1], reverse=True)
+#     facelist = facelist[:max_faces]
+
+#     face_tensors = torch.stack([fp[0] for fp in facelist]).to(device)  # (k,3,160,160)
+#     probs_top    = [float(fp[1]) for fp in facelist]
+
+#     with torch.no_grad():
+#         embeds = facenet(face_tensors).cpu().tolist()  # List[k][512]
+#     return {
+#         "n_faces": len(embeds),
+#         "embeddings": embeds,
+#         "detect_probs": probs[: len(embeds)].tolist(),
+#     }
+
+# def detect_objects(image_path: str, model, resnet, preprocess, device):
+#     img = Image.open(image_path).convert("RGB")
+#     results = model(image_path, conf=0.3, iou=0.45, max_det=64, verbose=False, show=False )     
+#     detections = []
+#     if not results:
+#         return detections
+#     res = results[0]                   # take the first Results object
+#     # lấy các tensor
+#     xyxy   = res.boxes.xyxy.cpu()      # shape (N,4)
+#     confs  = res.boxes.conf.cpu()      # shape (N,)
+#     classes= res.boxes.cls.cpu()       # shape (N,)
+#     for i in range(len(xyxy)):
+#         x1, y1, x2, y2 = xyxy[i].tolist()
+#         conf = float(confs[i])
+#         cls  = int(classes[i])
+#         crop = img.crop((x1, y1, x2, y2)).resize((224,224))
+#         tensor = preprocess(crop).unsqueeze(0).to(device)
+#         with torch.no_grad():
+#             feat_tensor = resnet(tensor).squeeze()   # still a Tensor
+#         # convert to plain Python list:
+#             feat = feat_tensor.cpu().tolist()
+#         detections.append(feat)
+#     return detections
+
+# def image_feature(img: Image.Image, resnet: torch.nn.Module, preprocess: Compose, device: torch.device) -> List[float]:
+#     preprocess_img_feat = Compose([
+#     # 1) Resize the shorter side to 256 (preserve aspect)
+#     Resize(256),
+#     # 2) Crop out the central 224×224 patch
+#     CenterCrop(224),
+#     ToTensor(),
+#     Normalize(mean=[0.485, 0.456, 0.406],
+#               std =[0.229, 0.224, 0.225])
+#     ])
+#     tensor = preprocess_img_feat(img).unsqueeze(0).to(device)
+#     with torch.no_grad():
+#         fmap = resnet(tensor)                         # (1,2048,7,7)
+#     fmap = fmap.squeeze(0)                            # (2048,7,7)
+#     # move channel to last dim → (7,7,2048), then flatten to (49,2048)
+#     patches = fmap.permute(1, 2, 0).reshape(-1, 2048)  # (49,2048)
+#     return patches.cpu().tolist() 
+
+def detect_faces(
+    img: Image.Image,
+    mtcnn,
+    facenet,
+    device: torch.device,
+    max_faces: int = 4,
+    pad_to: Optional[int] = None,   # set to an int (e.g., 4) if you want fixed length
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Returns:
+      feats: [S, 512] float32 (CPU)
+      mask:  [S] bool (True=PAD)
+    """
     with torch.no_grad():
         faces, probs = mtcnn(img, return_prob=True)
+
     if faces is None or len(faces) == 0:
-        return {"n_faces": 0, "embeddings": [], "detect_probs": []}
+        feats = torch.zeros((0, 512), dtype=torch.float32)
+        if pad_to is not None:
+            return _pad_to_len(feats, pad_to)
+        return feats, torch.zeros((0,), dtype=torch.bool)
+
     if isinstance(probs, torch.Tensor):
         probs = probs.tolist()
-    facelist = sorted(zip(faces, probs), key=lambda x: x[1], reverse=True)
-    facelist = facelist[:max_faces]
 
-    face_tensors = torch.stack([fp[0] for fp in facelist]).to(device)  # (k,3,160,160)
-    probs_top    = [float(fp[1]) for fp in facelist]
-
+    facelist = sorted(zip(faces, probs), key=lambda x: x[1], reverse=True)[:max_faces]
+    face_tensors = torch.stack([fp[0] for fp in facelist]).to(device)  # [k,3,160,160]
     with torch.no_grad():
-        embeds = facenet(face_tensors).cpu().tolist()  # List[k][512]
-    return {
-        "n_faces": len(embeds),
-        "embeddings": embeds,
-        "detect_probs": probs[: len(embeds)].tolist(),
-    }
+        embeds = facenet(face_tensors).float()  # [k,512] on device
+    feats = embeds.detach().cpu().contiguous()
 
-def detect_objects(image_path: str, model, resnet, preprocess, device):
+    if pad_to is not None:
+        return _pad_to_len(feats, pad_to)
+    return feats, torch.zeros(feats.size(0), dtype=torch.bool)
+
+def detect_objects(
+    image_path: str,
+    yolo, resnet, preprocess, device: torch.device,
+    conf: float = 0.3, iou: float = 0.45, max_det: int = 64,
+    pad_to: Optional[int] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Returns:
+      feats: [S, 2048] float32 (CPU)
+      mask:  [S] bool (True=PAD)
+    """
     img = Image.open(image_path).convert("RGB")
-    results = model(image_path, conf=0.3, iou=0.45, max_det=64, verbose=False, show=False )     
-    detections = []
-    if not results:
-        return detections
-    res = results[0]                   # take the first Results object
-    # lấy các tensor
-    xyxy   = res.boxes.xyxy.cpu()      # shape (N,4)
-    confs  = res.boxes.conf.cpu()      # shape (N,)
-    classes= res.boxes.cls.cpu()       # shape (N,)
-    for i in range(len(xyxy)):
-        x1, y1, x2, y2 = xyxy[i].tolist()
-        conf = float(confs[i])
-        cls  = int(classes[i])
-        crop = img.crop((x1, y1, x2, y2)).resize((224,224))
-        tensor = preprocess(crop).unsqueeze(0).to(device)
-        with torch.no_grad():
-            feat_tensor = resnet(tensor).squeeze()   # still a Tensor
-        # convert to plain Python list:
-            feat = feat_tensor.cpu().tolist()
-        detections.append(feat)
-    return detections
-
-def image_feature(img: Image.Image, resnet: torch.nn.Module, preprocess: Compose, device: torch.device) -> List[float]:
-    preprocess_img_feat = Compose([
-    # 1) Resize the shorter side to 256 (preserve aspect)
-    Resize(256),
-    # 2) Crop out the central 224×224 patch
-    CenterCrop(224),
-    ToTensor(),
-    Normalize(mean=[0.485, 0.456, 0.406],
-              std =[0.229, 0.224, 0.225])
-    ])
-    tensor = preprocess_img_feat(img).unsqueeze(0).to(device)
     with torch.no_grad():
-        fmap = resnet(tensor)                         # (1,2048,7,7)
-    fmap = fmap.squeeze(0)                            # (2048,7,7)
-    # move channel to last dim → (7,7,2048), then flatten to (49,2048)
-    patches = fmap.permute(1, 2, 0).reshape(-1, 2048)  # (49,2048)
-    return patches.cpu().tolist() 
+        results = yolo(image_path, conf=conf, iou=iou, max_det=max_det, verbose=False, show=False)
+
+    dets: List[torch.Tensor] = []
+    if results:
+        res = results[0]
+        xyxy = res.boxes.xyxy.cpu()
+        for i in range(len(xyxy)):
+            x1, y1, x2, y2 = map(float, xyxy[i].tolist())
+            crop = img.crop((x1, y1, x2, y2)).resize((224, 224))
+            t = preprocess(crop).unsqueeze(0).to(device)
+            with torch.no_grad():
+                feat = resnet(t).squeeze().detach().float()  # [2048]
+            dets.append(feat.cpu())
+
+    feats = torch.stack(dets, dim=0) if len(dets) else torch.zeros((0, 2048), dtype=torch.float32)
+    if pad_to is not None:
+        return _pad_to_len(feats, pad_to)
+    return feats, torch.zeros(feats.size(0), dtype=torch.bool)
+
+# ---------- IMAGE PATCHES (49 fixed) ----------
+def image_feature(
+    img: Image.Image,
+    resnet: torch.nn.Module,
+    preprocess: Compose,
+    device: torch.device,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Returns:
+      patches: [49, 2048] float32 (CPU)
+      mask:    [49] bool (all False)
+    """
+    pre = Compose([
+        Resize(256), CenterCrop(224), ToTensor(),
+        Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225])
+    ])
+    t = pre(img).unsqueeze(0).to(device)
+    with torch.no_grad():
+        fmap = resnet(t)                      # [1,2048,7,7]
+    patches = fmap.squeeze(0).permute(1, 2, 0).reshape(-1, 2048).contiguous().float().cpu()  # [49,2048]
+    mask = torch.zeros(49, dtype=torch.bool)  # fixed grid -> no padding
+    return patches, mask
 
 def load_split(path: str) -> Dict[str, dict]:
     with open(path, "r", encoding="utf-8") as f:

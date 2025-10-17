@@ -15,6 +15,10 @@ from tell.modules import AdaptiveSoftmax
 Image.MAX_IMAGE_PIXELS = None
 import h5py
 import logging
+
+MAX_FACES   = 4
+MAX_OBJECTS = 32
+
 class EarlyStopper:
     def __init__(self, patience=5, min_delta=0):
         """
@@ -49,16 +53,40 @@ def pad_and_collate(batch):
     caption_ids = [item["caption_ids"] for item in batch]
     image_paths = [item["image_path"] for item in batch]
 
+    # contexts = {
+    #     "image": pad_context_list([item["contexts"]["image"] for item in batch]),
+    #     "image_mask": pad_context_list([item["contexts"]["image_mask"] for item in batch], padding_value=True),
+    #     "faces": pad_context_list([item["contexts"]["faces"] for item in batch]),
+    #     "faces_mask": pad_context_list([item["contexts"]["faces_mask"] for item in batch], padding_value=True),
+    #     "obj": pad_context_list([item["contexts"]["obj"] for item in batch]),
+    #     "obj_mask": pad_context_list([item["contexts"]["obj_mask"] for item in batch], padding_value=True),
+    #     "article": pad_context_list([item["contexts"]["article"] for item in batch]),
+    #     "article_mask": pad_context_list([item["contexts"]["article_mask"] for item in batch], padding_value=True),
+    # }
     contexts = {
-        "image": pad_context_list([item["contexts"]["image"] for item in batch]),
-        "image_mask": pad_context_list([item["contexts"]["image_mask"] for item in batch], padding_value=True),
-        "faces": pad_context_list([item["contexts"]["faces"] for item in batch]),
-        "faces_mask": pad_context_list([item["contexts"]["faces_mask"] for item in batch], padding_value=True),
-        "obj": pad_context_list([item["contexts"]["obj"] for item in batch]),
-        "obj_mask": pad_context_list([item["contexts"]["obj_mask"] for item in batch], padding_value=True),
-        "article": pad_context_list([item["contexts"]["article"] for item in batch]),
-        "article_mask": pad_context_list([item["contexts"]["article_mask"] for item in batch], padding_value=True),
+        # -> [B,49,2048]
+        "image": pad_context_list([it["contexts"]["image"] for it in batch]),
+        # -> [B,49] (bool)
+        "image_mask": pad_context_list([it["contexts"]["image_mask"] for it in batch], padding_value=True),
+
+        # -> [B,4,512]
+        "faces": pad_context_list([it["contexts"]["faces"] for it in batch]),
+        # -> [B,4] (bool)
+        "faces_mask": pad_context_list([it["contexts"]["faces_mask"] for it in batch], padding_value=True),
+
+        # -> [B,64,2048]
+        "obj": pad_context_list([it["contexts"]["obj"] for it in batch]),
+        # -> [B,64] (bool)
+        "obj_mask": pad_context_list([it["contexts"]["obj_mask"] for it in batch], padding_value=True),
+
+        # -> [B,L,S,H] (e.g., [B,25,512,H])  — không combine
+        "article": pad_context_list([it["contexts"]["article"] for it in batch]),
+        # -> [B,S] (bool, True=PAD)
+        "article_mask": pad_context_list([it["contexts"]["article_mask"] for it in batch], padding_value=True),
     }
+    
+    for k in ("image_mask", "faces_mask", "obj_mask", "article_mask"):
+        contexts[k] = contexts[k].to(torch.bool)
 
     caption_ids = pad_sequence(caption_ids, batch_first=True, padding_value=0)
     return {
@@ -69,17 +97,8 @@ def pad_and_collate(batch):
         "image_path": image_paths,
     }
 
-def _h5_worker_init_fn(_):
-    # Each worker gets its own H5 handle
-    worker_info = torch.utils.data.get_worker_info()
-    if worker_info is not None:
-        ds = worker_info.dataset
-        if hasattr(ds, "close"):
-            ds.close()       # ensure clean state after fork
-        # lazy open will occur in __getitem__
-
 class NewsCaptionDataset(Dataset):
-    def __init__(self, data_dir, split, models, features_dir=None, max_length=512):
+    def __init__(self, data_dir, split, models, max_length=512):
         super().__init__()
         self.data_dir     = data_dir
         self.split        = split
@@ -91,11 +110,32 @@ class NewsCaptionDataset(Dataset):
         data_file = os.path.join(data_dir, f"{split}.json")
         with open(data_file, 'r') as f:
             self.data = json.load(f)
-        
+        if isinstance(self.data, dict):
+            # Sort keys numerically when possible
+            def _key(k):
+                try:
+                    return int(k)
+                except Exception:
+                    return k
+            self.items = [self.data[k] for k in sorted(self.data.keys(), key=_key)]
+        elif isinstance(self.data, list):
+            self.items = self.data
+        else:
+            raise ValueError(f"Unsupported JSON structure in {data_file}: {type(self.data)}")
+
+        # Stable ids for samplers
+        self.ids = list(range(len(self.items)))
+
         # Setup model for feature extraction
         self.embedder = self.models["embedder"]
         self.device = self.models["device"]
-        
+        self.mtcnn = self.models["mtcnn"]
+        self.facenet = self.models["facenet"]
+        self.resnet = self.models["resnet"]
+        self.resnet_object = self.models["resnet_object"]
+        self.yolo = self.models["yolo"]
+        self.preprocess = self.models["preprocess"]
+        self.embedder = self.models["embedder"]
     def __len__(self):
         return len(self.ids)
 
@@ -119,87 +159,42 @@ class NewsCaptionDataset(Dataset):
         except Exception:
             return {}
 
-    @staticmethod
-    def _pad_article(article_np: np.ndarray, target_len=512):
-        """Pad/trim article to target_len along dim 0; return (np.float32 [L,D], mask [L], torch)."""
-        L, D = article_np.shape if article_np.ndim == 2 else (0, 0)
-        if L >= target_len:
-            arr = article_np[:target_len]
-            mask = torch.zeros((target_len,), dtype=torch.bool)
-        else:
-            arr = np.zeros((target_len, D), dtype=np.float32)
-            if L > 0:
-                arr[:L] = article_np
-            mask = torch.zeros((target_len,), dtype=torch.bool)
-            mask[L:] = True
-        return arr, mask
 
     def __getitem__(self, idx):
-        item = self.data[idx]
+        item = self.items[idx]
 
-        context = " ".join(item.get("paragraphs", []))
+        segmented_context = []
+        context = item.get("paragraphs", [])
         caption = item.get("caption", "")
-        try:
-            segmented_context = segment_text(context, models["vncore"])
-        except Exception as e:
-            logging.error(f"Text preprocess error {idx}: {e}")
-
-        try:
-            img_id = item["image_path"].split("images/")[-1]
-            img_path = f"/data2/npl/ICEK/Wikipedia/images_resized/{img_id}"
-            image = Image.open(img_path).convert("RGB")
-            mtcnn = self.models["mtcnn"]; facenet = self.models["facenet"]; resnet = self.models["resnet"]
-            resnet_object = self.models["resnet_object"]; yolo = self.models["yolo"]; preprocess = self.models["preprocess"]
-            embedder = self.models["embedder"]; device = self.models["device"]
-            face_info = detect_faces(image, mtcnn, facenet, device)
-            obj_feats = detect_objects(img_path, yolo, resnet_object, preprocess, device)
-            img_feat = np.array(image_feature(image, resnet, preprocess, device), dtype=np.float32)
-            art_embed = embedder([segmented_context]).cpu().numpy()
-            features = {
-                "image_feature": img_feat,
-                "face_embeddings": np.array(face_info.get("embeddings", []), dtype=np.float32) if face_info.get("embeddings") is not None and len(face_info.get("embeddings")) else np.zeros((1, 512), dtype=np.float32),
-                "face_detect_probs": np.array(face_info.get("detect_probs", []), dtype=np.float32) if face_info.get("detect_probs") else np.zeros((1,), dtype=np.float32),
-                "face_n_faces": np.array(face_info.get("n_faces", 0), dtype=np.int32),
-                "object_features": np.array(obj_feats, dtype=np.float32) if obj_feats else np.zeros((1, 2048), dtype=np.float32),
-                "article_embed": art_embed,
-            }
-
-        except Exception as e:
-            logging.error(f"Index preprocessing: {idx}: {e}")
-
-            img = self._ensure_float32(features["image_feature"][()])
-            obj = self._ensure_float32(features["object_features"][()])
-            art = self._ensure_float32(features["article_embed"][()])
-
-            if "face_embeddings" in features:
-                faces = self._ensure_float32(features["face_embeddings"][()])
-            else:
-                faces = np.zeros((0, 512), dtype=np.float32)
-
-            # Convert to tensors and sanitize NaN/inf
-            image_tensor = torch.nan_to_num(torch.as_tensor(img, dtype=torch.float32), nan=0.0, posinf=0.0, neginf=0.0)
-            obj_tensor   = torch.nan_to_num(torch.as_tensor(obj, dtype=torch.float32), nan=0.0, posinf=0.0, neginf=0.0)
-            faces_tensor = torch.nan_to_num(torch.as_tensor(faces, dtype=torch.float32), nan=0.0, posinf=0.0, neginf=0.0)
-            art_np, art_mask = self._pad_article(art, target_len=512)
-            art_tensor  = torch.nan_to_num(torch.as_tensor(art_np, dtype=torch.float32), nan=0.0, posinf=0.0, neginf=0.0)
-
-            # Masks
-            image_mask = torch.zeros((image_tensor.size(0),), dtype=torch.bool)
-            obj_mask   = torch.zeros((obj_tensor.size(0),), dtype=torch.bool) if obj_tensor.size(0) > 0 \
-                         else torch.ones((0,), dtype=torch.bool)
-            faces_mask = torch.zeros((faces_tensor.size(0),), dtype=torch.bool) if faces_tensor.size(0) > 0 \
-                         else torch.ones((0,), dtype=torch.bool)
-
-            contexts = {
-                "image": image_tensor,
-                "image_mask": image_mask,
-                "faces": faces_tensor,
-                "faces_mask": faces_mask,
-                "obj": obj_tensor,
-                "obj_mask": obj_mask,
-                "article": art_tensor,
-                "article_mask": art_mask,
-            }
+        for sentence in context:
+            segmented_context.append(segment_text(sentence, self.models["vncore"]))
+        
+        caption = segment_text(caption, self.models["vncore"])
+    
+        img_id = item["image_path"].split("images/")[-1]
+        img_path = f"/data2/npl/ICEK/Wikipedia/images_resized/{img_id}"
+        image = Image.open(img_path).convert("RGB")
+        # mtcnn = self.models["mtcnn"]; facenet = self.models["facenet"]; resnet = self.models["resnet"]
+        # resnet_object = self.models["resnet_object"]; yolo = self.models["yolo"]; preprocess = self.models["preprocess"]
+        # embedder = self.models["embedder"]; device = self.models["device"]
+        face_feats, face_mask = detect_faces(image, self.mtcnn, self.facenet, self.device, max_faces=MAX_FACES, pad_to=MAX_FACES)
+        obj_feats, obj_mask = detect_objects(img_path, self.yolo, self.resnet_object, self.preprocess, self.device, max_det=MAX_OBJECTS, pad_to=MAX_OBJECTS)
+        img_feats, img_mask = image_feature(image, self.resnet, self.preprocess, self.device)
+        art_feats_b, attn_mask_b = self.embedder(segmented_context)   
+        art_feats  = art_feats_b[0].contiguous()                    
+        art_mask = (~attn_mask_b[0].bool()).contiguous()
+        # art_feats, art_mask = embedder(segmented_context).cpu().numpy()
+        
+        contexts = {
+            "image": img_feats,
+            "image_mask": img_mask,
+            "faces": face_feats,
+            "faces_mask": face_mask,
+            "obj": obj_feats,
+            "obj_mask": obj_mask,
+            "article": art_feats,
+            "article_mask": art_mask,
+        }
 
         # Tokenize caption (stay on CPU; move to device later)
         if self.tokenizer is None:
@@ -219,16 +214,6 @@ class NewsCaptionDataset(Dataset):
             "caption": caption,
             "image_path": item["image_path"],
         }
-
-    # ---- cleanup ----
-    def close(self):
-        for f in self._open_files.values():
-            try: f.close()
-            except Exception: pass
-        self._open_files.clear()
-
-    def __del__(self):
-        self.close()
 
 
 class TransformAndTell(nn.Module):
@@ -318,7 +303,6 @@ def train_model(config):
         shuffle=True,
         num_workers=config["num_workers"],
         collate_fn=pad_and_collate,
-        worker_init_fn=_h5_worker_init_fn,
         pin_memory=True if torch.cuda.is_available() else False,
     )
 
@@ -328,10 +312,9 @@ def train_model(config):
         shuffle=False,
         num_workers=config["num_workers"],
         collate_fn=pad_and_collate,
-        worker_init_fn=_h5_worker_init_fn,
         pin_memory=True if torch.cuda.is_available() else False,
     )
-    print("DATALOADER LOADED!")
+    print("[DEBUG] DATALOADER LOADED!")
     
     embedder = AdaptiveEmbedding(
         vocab_size=config["embedder"]["vocab_size"],
@@ -342,7 +325,7 @@ def train_model(config):
         cutoff=config["embedder"]["cutoff"],
         scale_embeds=True
     )
-    print("EMBEDDERR LOADED!")
+    print("[DEBUG] EMBEDDERR LOADED!")
     model = TransformAndTell(
         vocab_size=config["vocab_size"],
         embedder=embedder,
@@ -366,12 +349,12 @@ def train_model(config):
         adaptive_inputs=embedder if config["decoder_params"]["tie_adaptive_weights"] else None,
         tie_proj=config["decoder_params"]["tie_adaptive_proj"]
     ).to(device)
-    print("CRITERION LOADED!")
+    print("[DEBUG] CRITERION LOADED!")
     early_stopper = EarlyStopper(
         patience=config.get("early_stopping_patience", 5),
         min_delta=config.get("early_stopping_min_delta", 0.01)
     )
-    print("START TRAINING!")
+    print("[DEBUG] START TRAINING!")
     best_val_loss = float('inf')
     ce_loss = nn.CrossEntropyLoss(ignore_index=config["decoder_params"]["padding_idx"])
     print(f"[DEBUG] num of epoch: {config['epochs']}")
@@ -493,7 +476,6 @@ def evaluate_model(model, models, config):
         shuffle=False,
         num_workers=config["num_workers"],
         collate_fn=pad_and_collate,
-        worker_init_fn=_h5_worker_init_fn,
         pin_memory=True if torch.cuda.is_available() else False,
     )
     
@@ -598,7 +580,7 @@ def load_saved_model(config, model_path, models):
 if __name__ == "__main__":
     # Configuration (parameters from paper and config.yaml)
     config = {
-        "data_dir": "/data2/npl/ICEK/TnT/dataset/content",
+        "data_dir": "/data2/npl/ICEK/Wikipedia/content/ver4",
         "output_dir": "/data2/npl/ICEK/TnT/output",
         "vncorenlp_path": "/data2/npl/ICEK/VnCoreNLP",
         "vocab_size": 64001,  # From phoBERT-base tokenizer
