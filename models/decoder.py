@@ -92,7 +92,6 @@ class DynamicConvFacesObjectsDecoder(Decoder):
         self.article_layer_alpha = nn.Parameter(torch.zeros(25))  # stable init; softmax later
         self.expected_article_layers = 25  # RoBERTa/PhoBERT-large
         
-
     def forward(self, prev_target, contexts, incremental_state=None,
                 use_layers=None, **kwargs):
 
@@ -133,7 +132,10 @@ class DynamicConvFacesObjectsDecoder(Decoder):
             raise ValueError(f"contexts['article'] must be 3D/4D, got {article.dim()}D")
 
         # MultiHeadAttention in TnT expects keys/values as TBC: [S, B, C]
+        contexts["image"] = contexts["image"].transpose(0, 1).contiguous()            # [S,B,H]
         contexts["article"] = article.transpose(0, 1).contiguous()            # [S,B,H]
+        contexts["faces"] = contexts["faces"].transpose(0, 1).contiguous()            # [S,B,H]
+        contexts["obj"] = contexts["obj"].transpose(0, 1).contiguous()            # [S,B,H]
         # (Keep mask as [B,S]; no change)
 
         

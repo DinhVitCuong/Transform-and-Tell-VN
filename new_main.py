@@ -42,6 +42,13 @@ class EarlyStopper:
                 return True
         return False
  
+def _to_cpu(t, dtype=None):
+        if isinstance(t, torch.Tensor):
+            t = t.detach().to("cpu").contiguous()
+            if dtype is not None:
+                t = t.to(dtype)
+        return t
+
 def pad_and_collate(batch):
     from torch.nn.utils.rnn import pad_sequence
 
@@ -88,10 +95,10 @@ def pad_and_collate(batch):
     for k in ("image_mask", "faces_mask", "obj_mask", "article_mask"):
         contexts[k] = contexts[k].to(torch.bool)
 
-    print(f"[DEBUG]: art_feat {contexts['article']}, art_mask: {contexts['article_mask']}")
-    print(f"[DEBUG]: img_feat {contexts['image']}, img_mask: {contexts['image_mask']}")
-    print(f"[DEBUG]: obj_feat {contexts['obj']}, obj_mask: {contexts['obj_mask']}")
-    print(f"[DEBUG]: face_feat {contexts['faces']}, face_mask: {contexts['faces_mask']}")
+    print(f"[DEBUG]: art_feat {contexts['article'].shape}, art_mask: {contexts['article_mask'].shape}")
+    print(f"[DEBUG]: img_feat {contexts['image'].shape}, img_mask: {contexts['image_mask'].shape}")
+    print(f"[DEBUG]: obj_feat {contexts['obj'].shape}, obj_mask: {contexts['obj_mask'].shape}")
+    print(f"[DEBUG]: face_feat {contexts['faces'].shape}, face_mask: {contexts['faces_mask'].shape}")
 
     caption_ids = pad_sequence(caption_ids, batch_first=True, padding_value=0)
     return {
@@ -143,27 +150,6 @@ class NewsCaptionDataset(Dataset):
     def __len__(self):
         return len(self.ids)
 
-    # ---------- small utils ----------
-    @staticmethod
-    def _ensure_float32(arr):
-        # Accept numpy or torch; return numpy float32 contiguous
-        if arr is None:
-            return np.zeros((0,), dtype=np.float32)
-        if isinstance(arr, torch.Tensor):
-            arr = arr.detach().cpu().numpy()
-        return np.ascontiguousarray(arr, dtype=np.float32)
-
-    @staticmethod
-    def _decode_json_dataset(dset):
-        raw = dset[()]
-        if isinstance(raw, (bytes, bytearray, np.bytes_)):
-            raw = raw.decode("utf-8", errors="ignore")
-        try:
-            return json.loads(raw)
-        except Exception:
-            return {}
-
-
     def __getitem__(self, idx):
         item = self.items[idx]
 
@@ -188,6 +174,17 @@ class NewsCaptionDataset(Dataset):
         art_feats  = art_feats_b[0].contiguous()                    
         art_mask = (~attn_mask_b[0].bool()).contiguous()
         # art_feats, art_mask = embedder(segmented_context).cpu().numpy()
+        img_feats  = _to_cpu(img_feats)
+        img_mask   = _to_cpu(img_mask, dtype=torch.bool)
+
+        face_feats = _to_cpu(face_feats)
+        face_mask  = _to_cpu(face_mask, dtype=torch.bool)
+
+        obj_feats  = _to_cpu(obj_feats)
+        obj_mask   = _to_cpu(obj_mask,  dtype=torch.bool)
+
+        art_feats  = _to_cpu(art_feats)               # [S, H] or [B,S,H] depending on your embedder
+        art_mask   = _to_cpu(art_mask, dtype=torch.bool)
         contexts = {
             "image": img_feats,
             "image_mask": img_mask,
@@ -371,8 +368,10 @@ def train_model(config):
         num_batches = 0
 
         for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}"):
-            caption_ids = batch["caption_ids"].to(device)
-            contexts = {k: v.to(device) for k, v in batch["contexts"].items()}
+            # caption_ids = batch["caption_ids"].to(device)
+            # contexts = {k: v.to(device) for k, v in batch["contexts"].items()}
+            caption_ids = batch["caption_ids"].to(device, non_blocking=True)
+            contexts    = {k: v.to(device, non_blocking=True) for k, v in batch["contexts"].items()}
             
             optimizer.zero_grad()
             logits, _ = model(caption_ids[:, :-1], contexts)
@@ -428,8 +427,10 @@ def train_model(config):
         val_total_tokens = 0
         with torch.no_grad():
             for batch in tqdm(val_loader, desc="Validating"):
-                caption_ids = batch["caption_ids"].to(device)
-                contexts = {k: v.to(device) for k, v in batch["contexts"].items()}
+                # caption_ids = batch["caption_ids"].to(device)
+                # contexts = {k: v.to(device) for k, v in batch["contexts"].items()}
+                caption_ids = batch["caption_ids"].to(device, non_blocking=True)
+                contexts    = {k: v.to(device, non_blocking=True) for k, v in batch["contexts"].items()}
                 
                 logits, _ = model(caption_ids[:, :-1], contexts)
                 
@@ -501,8 +502,10 @@ def evaluate_model(model, models, config):
 
     with torch.no_grad():
         for batch in tqdm(test_loader, desc="Evaluating"):
-            caption_ids = batch["caption_ids"].to(device)
-            contexts = {k: v.to(device) for k, v in batch["contexts"].items()}
+            # caption_ids = batch["caption_ids"].to(device)
+            # contexts = {k: v.to(device) for k, v in batch["contexts"].items()}
+            caption_ids = batch["caption_ids"].to(device, non_blocking=True)
+            contexts    = {k: v.to(device, non_blocking=True) for k, v in batch["contexts"].items()}
             
             # Forward pass
             logits, _ = model(caption_ids[:, :-1], contexts)
