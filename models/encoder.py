@@ -72,169 +72,147 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
+
 # class RobertaEmbedder(torch.nn.Module):
-#     def __init__(self, model, tokenizer, device, target_len: int = 512, expected_layers: int = 25):
+
+#     def __init__(self, model, tokenizer, device, expected_layers: int = 25, target_len: int = 512):
 #         super().__init__()
-#         self.model = model
-#         self.tokenizer = tokenizer
+#         self.model = model.eval()
+#         self.tok = tokenizer
 #         self.device = device
-#         self.hidden_size = model.config.hidden_size
-#         self.num_layers = model.config.num_hidden_layers + 1  # Include input embedding layer
-#         self.max_position_embeddings = model.config.max_position_embeddings  # Usually 512
-#         self.max_tokens_per_sentence = self.max_position_embeddings - 2  # Reserve for special tokens
-#         self.target_len = int(target_len)            # force T = 512
-#         self.expected_layers = int(expected_layers)  # force L = 25
+#         self.expected_layers = int(expected_layers)   # 25 for *-large, 13 for *-base
+#         self.target_len = int(min(target_len, int(getattr(model.config, "max_position_embeddings", 512))))
 
-#     def _pack_one(self, text: str) -> Tuple[List[int], List[int]]:
-#         """
-#         Build a single sequence: <BOS> + as many content tokens as fit + <EOS>, then pad to target_len.
-#         Returns (input_ids, attention_mask) as Python lists (len == target_len).
-#         """
-#         # split on your custom separator, drop empties
-#         segs = [s.strip() for s in (text or "").split(" <SEP> ") if s and s.strip()]
+#         # quick sanity
+#         h = int(getattr(self.model.config, "hidden_size", 0))
+#         if h <= 0:
+#             raise ValueError("model.config.hidden_size is invalid; load a proper (PhoBERT/RoBERTa) checkpoint.")
 
-#         # reserve 2 slots for BOS/EOS -> content budget
-#         budget = max(self.target_len - 2, 0)
-#         ids = [self.bos_id]
-#         consumed = 0
+#     @torch.no_grad()
+#     def forward(self, texts: List[str]) -> Tuple[torch.Tensor, torch.Tensor]:
+#         import torch
+#         if not isinstance(texts, (list, tuple)):
+#             texts = [texts]
 
-#         # add tokens segment-by-segment, never exceeding budget
-#         for seg in segs:
-#             # tokenize WITHOUT special tokens
-#             seg_ids = self.tokenizer.encode(seg, add_special_tokens=False)
-#             if not seg_ids:
-#                 continue
-#             remaining = budget - consumed
-#             if remaining <= 0:
-#                 break
-#             if len(seg_ids) <= remaining:
-#                 ids.extend(seg_ids)
-#                 consumed += len(seg_ids)
-#             else:
-#                 ids.extend(seg_ids[:remaining])
-#                 consumed += remaining
-#                 break
+#         # Replace custom separator and add a leading space for RoBERTa-style tokenization
+#         proc = []
+#         for t in texts:
+#             t = (t or "").replace(" <SEP> ", " ")
+#             if not t.startswith(" "):
+#                 t = " " + t
+#             proc.append(t)
+#         proc_text = ". ".join(proc)
+#         batch = self.tok(
+#             proc_text,
+#             padding="max_length",
+#             truncation=True,
+#             max_length=self.target_len,   # ≤ model.config.max_position_embeddings (512)
+#             return_tensors="pt",
+#             add_special_tokens=True,
+#         )
 
-#         ids.append(self.eos_id)
+#         input_ids = batch["input_ids"].to(self.device).long()
+#         attn_mask = batch["attention_mask"].to(self.device).long()  # keep 0/1 int
 
-#         # pad to target_len
-#         attn = [1] * len(ids)
-#         if len(ids) < self.target_len:
-#             pad_len = self.target_len - len(ids)
-#             ids.extend([self.pad_id] * pad_len)
-#             attn.extend([0] * pad_len)
-#         elif len(ids) > self.target_len:
-#             # extremely rare, but guard anyway (keep BOS + content up to T-1, then EOS)
-#             ids = ids[: self.target_len - 1] + [self.eos_id]
-#             attn = [1] * self.target_len
+#         # Hard guard (keeps CUDA from device-side assert later)
+#         vocab = int(self.model.config.vocab_size)
+#         mn, mx = int(input_ids.min().item()), int(input_ids.max().item())
+#         if mn < 0 or mx >= vocab:
+#             raise ValueError(f"OOR token id: min={mn}, max={mx}, vocab_size={vocab}")
 
-#         return ids, attn
+#         out = self.model(
+#             input_ids=input_ids,
+#             attention_mask=attn_mask,
+#             output_hidden_states=True,
+#         )
 
-    # def forward(self, segmented_texts: List[str]) -> torch.Tensor:
-    #     """Process a list of pre-segmented texts, returning all PhoBERT hidden states"""
-    #     embeddings = []
-    #     for segmented in segmented_texts:
-    #         seg_sentences = segmented.split(' <SEP> ') if segmented else []
-    #         if not seg_sentences:
-    #             embeddings.append(torch.zeros(self.num_layers, 1, self.hidden_size, device=self.device))
-    #             continue
+#         hs = torch.stack(list(out.hidden_states), dim=1).contiguous()  # [B, L_actual, 512, H]
+#         L_actual = hs.size(1)
+#         if L_actual < self.expected_layers:
+#             pad = self.expected_layers - L_actual
+#             hs = torch.cat([hs, hs.new_zeros(hs.size(0), pad, hs.size(2), hs.size(3))], dim=1)
+#         elif L_actual > self.expected_layers:
+#             hs = hs[:, -self.expected_layers:, :, :]
 
-    #         sent_embeddings = []
-    #         current_length = 0
-    #         for seg_sent in seg_sentences:
-    #             if current_length >= self.max_position_embeddings:
-    #                 break
-    #             input = seg_sent.strip()
-    #             if not input:
-    #                 continue
-    #             remaining = self.max_position_embeddings - current_length
-    #             max_length = min(remaining, self.max_tokens_per_sentence)
-    #             toks = self.tokenizer(
-    #                 input,
-    #                 truncation=True,
-    #                 max_length=max_length,
-    #                 return_tensors="pt",
-    #                 add_special_tokens=True
-    #             ).to(self.device)
-    #             if toks.input_ids.size(1) == 0:
-    #                 continue
-    #             seq_len = toks.input_ids.size(1)
-    #             position_ids = torch.arange(0, seq_len, dtype=torch.long, device=self.device)
-    #             position_ids = position_ids.clamp(max=self.max_position_embeddings-1)
-    #             toks['position_ids'] = position_ids.unsqueeze(0)
-    #             with torch.no_grad():
-    #                 outputs = self.model(**toks, output_hidden_states=True)
-    #             hidden_states = torch.stack(outputs.hidden_states)  # [num_layers, 1, seq_len, hidden]
-    #             sent_embeddings.append(hidden_states.squeeze(1))  # [num_layers, seq_len, hidden]
-    #             current_length += seq_len
-    #         if not sent_embeddings:
-    #             embeddings.append(torch.zeros(self.num_layers, 1, self.hidden_size, device=self.device))
-    #         else:
-    #             # Fix: Concatenate directly along sequence dimension
-    #             full_embedding = torch.cat(sent_embeddings, dim=1)[:, :self.max_position_embeddings, :]
-    #             embeddings.append(full_embedding)
-    #     # Pad to max length
-    #     max_len = max(e.size(1) for e in embeddings)
-    #     padded_embeddings = torch.zeros(len(embeddings), self.num_layers, max_len, self.hidden_size, device=self.device)
-    #     for i, emb in enumerate(embeddings):
-    #         padded_embeddings[i, :, :emb.size(1), :] = emb
-    #     return padded_embeddings  # [sentences, num_layers, seq_len, hidden_size]
+#         attn_mask_bool = attn_mask.to(torch.bool)  # True=token, False=pad (flip later if needed)
+#         return hs, attn_mask_bool
 
 
-class RobertaEmbedder(torch.nn.Module):
-
-    def __init__(self, model, tokenizer, device, expected_layers: int = 25, target_len: int = 512):
+class RobertaEmbedder(nn.Module):
+    def __init__(self, model, tokenizer, device,
+                 expected_layers: int = 25,
+                 target_len: int = 512):
         super().__init__()
         self.model = model.eval()
         self.tok = tokenizer
         self.device = device
-        self.expected_layers = int(expected_layers)   # 25 for *-large, 13 for *-base
-        self.target_len = int(min(target_len, int(getattr(model.config, "max_position_embeddings", 512))))
 
-        # quick sanity
+        mp = int(getattr(self.model.config, "max_position_embeddings", 512))
+        self.target_len = int(min(int(target_len), mp))
+        self.expected_layers = int(expected_layers)
+
         h = int(getattr(self.model.config, "hidden_size", 0))
         if h <= 0:
-            raise ValueError("model.config.hidden_size is invalid; load a proper (PhoBERT/RoBERTa) checkpoint.")
+            raise ValueError("model.config.hidden_size invalid.")
+        self.hidden_size = h
+        self.max_position_embeddings = mp
 
     @torch.no_grad()
     def forward(self, texts: List[str]) -> Tuple[torch.Tensor, torch.Tensor]:
-        import torch
         if not isinstance(texts, (list, tuple)):
             texts = [texts]
 
-        # Replace custom separator and add a leading space for RoBERTa-style tokenization
+        # preprocess: replace SEP, ensure non-empty, and prefix space for RoBERTa
         proc = []
         for t in texts:
-            t = (t or "").replace(" <SEP> ", " ")
+            t = (t or "").replace(" <SEP> ", " ").strip()
+            if not t:
+                t = "."                      # keep at least a token
             if not t.startswith(" "):
                 t = " " + t
             proc.append(t)
 
+        # tokenize (CPU) -> move to GPU (fast, and enables GPU checks)
         batch = self.tok(
             proc,
             padding="max_length",
             truncation=True,
-            max_length=self.target_len,   # ≤ model.config.max_position_embeddings (512)
+            max_length=self.target_len,      # <= max_position_embeddings
             return_tensors="pt",
             add_special_tokens=True,
         )
+        input_ids = batch["input_ids"].to(self.device, non_blocking=True).long()      # [B,S]
+        attn_mask = batch["attention_mask"].to(self.device, non_blocking=True).long() # [B,S] (0/1)
 
-        input_ids = batch["input_ids"].to(self.device).long()
-        attn_mask = batch["attention_mask"].to(self.device).long()  # keep 0/1 int
-
-        # Hard guard (keeps CUDA from device-side assert later)
+        # ---- GPU sanity checks (cheap scalar sync only) ----
         vocab = int(self.model.config.vocab_size)
-        mn, mx = int(input_ids.min().item()), int(input_ids.max().item())
-        if mn < 0 or mx >= vocab:
-            raise ValueError(f"OOR token id: min={mn}, max={mx}, vocab_size={vocab}")
 
+        bad_low  = (input_ids < 0).any()
+        bad_high = (input_ids >= vocab).any()
+        if (bad_low | bad_high).item():  # sync one scalar
+            # find first offending example/pos (optional, costs a bit more)
+            raise ValueError(
+                f"[RobertaEmbedder] token id out of range (vocab_size={vocab}). "
+                f"Hint: tokenizer/model mismatch or custom tokens without resize."
+            )
+
+        bad_mask = ((attn_mask != 0) & (attn_mask != 1)).any()
+        if bad_mask.item():
+            raise ValueError("[RobertaEmbedder] attention_mask must be 0/1.")
+
+        if input_ids.shape != attn_mask.shape:
+            raise ValueError(f"ids {tuple(input_ids.shape)} vs mask {tuple(attn_mask.shape)} mismatch.")
+
+        # ---- Forward (GPU) ----
         out = self.model(
             input_ids=input_ids,
-            attention_mask=attn_mask,
+            attention_mask=attn_mask,        # 0/1 long is fine
             output_hidden_states=True,
         )
+        # tuple(L_actual) of [B,S,H] -> [B,L_actual,S,H]
+        hs = torch.stack(list(out.hidden_states), dim=1).contiguous()
 
-        hs = torch.stack(list(out.hidden_states), dim=1).contiguous()  # [B, L_actual, 512, H]
+        # normalize layer count
         L_actual = hs.size(1)
         if L_actual < self.expected_layers:
             pad = self.expected_layers - L_actual
@@ -242,7 +220,8 @@ class RobertaEmbedder(torch.nn.Module):
         elif L_actual > self.expected_layers:
             hs = hs[:, -self.expected_layers:, :, :]
 
-        attn_mask_bool = attn_mask.to(torch.bool)  # True=token, False=pad (flip later if needed)
+        # True=token, False=pad (flip later if your decoder expects True=PAD)
+        attn_mask_bool = attn_mask.to(torch.bool)
         return hs, attn_mask_bool
 
 # def setup_models(device: torch.device, vncorenlp_path="/data2/npl/ICEK/VnCoreNLP"):
