@@ -73,146 +73,53 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
-# class RobertaEmbedder(torch.nn.Module):
+class RobertaEmbedder(torch.nn.Module):
 
-#     def __init__(self, model, tokenizer, device, expected_layers: int = 25, target_len: int = 512):
-#         super().__init__()
-#         self.model = model.eval()
-#         self.tok = tokenizer
-#         self.device = device
-#         self.expected_layers = int(expected_layers)   # 25 for *-large, 13 for *-base
-#         self.target_len = int(min(target_len, int(getattr(model.config, "max_position_embeddings", 512))))
-
-#         # quick sanity
-#         h = int(getattr(self.model.config, "hidden_size", 0))
-#         if h <= 0:
-#             raise ValueError("model.config.hidden_size is invalid; load a proper (PhoBERT/RoBERTa) checkpoint.")
-
-#     @torch.no_grad()
-#     def forward(self, texts: List[str]) -> Tuple[torch.Tensor, torch.Tensor]:
-#         import torch
-#         if not isinstance(texts, (list, tuple)):
-#             texts = [texts]
-
-#         # Replace custom separator and add a leading space for RoBERTa-style tokenization
-#         proc = []
-#         for t in texts:
-#             t = (t or "").replace(" <SEP> ", " ")
-#             if not t.startswith(" "):
-#                 t = " " + t
-#             proc.append(t)
-#         proc_text = ". ".join(proc)
-#         batch = self.tok(
-#             proc_text,
-#             padding="max_length",
-#             truncation=True,
-#             max_length=self.target_len,   # ≤ model.config.max_position_embeddings (512)
-#             return_tensors="pt",
-#             add_special_tokens=True,
-#         )
-
-#         input_ids = batch["input_ids"].to(self.device).long()
-#         attn_mask = batch["attention_mask"].to(self.device).long()  # keep 0/1 int
-
-#         # Hard guard (keeps CUDA from device-side assert later)
-#         vocab = int(self.model.config.vocab_size)
-#         mn, mx = int(input_ids.min().item()), int(input_ids.max().item())
-#         if mn < 0 or mx >= vocab:
-#             raise ValueError(f"OOR token id: min={mn}, max={mx}, vocab_size={vocab}")
-
-#         out = self.model(
-#             input_ids=input_ids,
-#             attention_mask=attn_mask,
-#             output_hidden_states=True,
-#         )
-
-#         hs = torch.stack(list(out.hidden_states), dim=1).contiguous()  # [B, L_actual, 512, H]
-#         L_actual = hs.size(1)
-#         if L_actual < self.expected_layers:
-#             pad = self.expected_layers - L_actual
-#             hs = torch.cat([hs, hs.new_zeros(hs.size(0), pad, hs.size(2), hs.size(3))], dim=1)
-#         elif L_actual > self.expected_layers:
-#             hs = hs[:, -self.expected_layers:, :, :]
-
-#         attn_mask_bool = attn_mask.to(torch.bool)  # True=token, False=pad (flip later if needed)
-#         return hs, attn_mask_bool
-
-
-class RobertaEmbedder(nn.Module):
-    def __init__(self, model, tokenizer, device,
-                 expected_layers: int = 25,
-                 target_len: int = 512):
+    def __init__(self, model, tokenizer, device, expected_layers: int = 25):
         super().__init__()
         self.model = model.eval()
         self.tok = tokenizer
         self.device = device
+        self.expected_layers = int(expected_layers)   # 25 for *-large, 13 for *-base
+        self.target_len = 256
 
-        mp = int(getattr(self.model.config, "max_position_embeddings", 512))
-        self.target_len = int(min(int(target_len), mp))
-        self.expected_layers = int(expected_layers)
-
+        # quick sanity
         h = int(getattr(self.model.config, "hidden_size", 0))
         if h <= 0:
-            raise ValueError("model.config.hidden_size invalid.")
-        self.hidden_size = h
-        self.max_position_embeddings = mp
+            raise ValueError("model.config.hidden_size is invalid; load a proper (PhoBERT/RoBERTa) checkpoint.")
 
     @torch.no_grad()
     def forward(self, texts: List[str]) -> Tuple[torch.Tensor, torch.Tensor]:
-        if not isinstance(texts, (list, tuple)):
-            texts = [texts]
-
-        # preprocess: replace SEP, ensure non-empty, and prefix space for RoBERTa
         proc = []
         for t in texts:
-            t = (t or "").replace(" <SEP> ", " ").strip()
-            if not t:
-                t = "."                      # keep at least a token
+            t = (t or "").replace("<SEP>", " ")
             if not t.startswith(" "):
                 t = " " + t
             proc.append(t)
-
-        # tokenize (CPU) -> move to GPU (fast, and enables GPU checks)
         batch = self.tok(
             proc,
             padding="max_length",
             truncation=True,
-            max_length=self.target_len,      # <= max_position_embeddings
+            max_length=self.target_len,   
             return_tensors="pt",
             add_special_tokens=True,
         )
-        input_ids = batch["input_ids"].to(self.device, non_blocking=True).long()      # [B,S]
-        attn_mask = batch["attention_mask"].to(self.device, non_blocking=True).long() # [B,S] (0/1)
+        input_ids = batch["input_ids"].to(self.device).long()
+        attn_mask = batch["attention_mask"].to(self.device).long()  # keep 0/1 int
 
-        # ---- GPU sanity checks (cheap scalar sync only) ----
+        # Hard guard (keeps CUDA from device-side assert later)
         vocab = int(self.model.config.vocab_size)
+        mn, mx = int(input_ids.min().item()), int(input_ids.max().item())
+        if mn < 0 or mx >= vocab:
+            raise ValueError(f"OOR token id: min={mn}, max={mx}, vocab_size={vocab}")
 
-        bad_low  = (input_ids < 0).any()
-        bad_high = (input_ids >= vocab).any()
-        if (bad_low | bad_high).item():  # sync one scalar
-            # find first offending example/pos (optional, costs a bit more)
-            raise ValueError(
-                f"[RobertaEmbedder] token id out of range (vocab_size={vocab}). "
-                f"Hint: tokenizer/model mismatch or custom tokens without resize."
-            )
-
-        bad_mask = ((attn_mask != 0) & (attn_mask != 1)).any()
-        if bad_mask.item():
-            raise ValueError("[RobertaEmbedder] attention_mask must be 0/1.")
-
-        if input_ids.shape != attn_mask.shape:
-            raise ValueError(f"ids {tuple(input_ids.shape)} vs mask {tuple(attn_mask.shape)} mismatch.")
-
-        # ---- Forward (GPU) ----
         out = self.model(
             input_ids=input_ids,
-            attention_mask=attn_mask,        # 0/1 long is fine
+            attention_mask=attn_mask,
             output_hidden_states=True,
         )
-        # tuple(L_actual) of [B,S,H] -> [B,L_actual,S,H]
-        hs = torch.stack(list(out.hidden_states), dim=1).contiguous()
 
-        # normalize layer count
+        hs = torch.stack(list(out.hidden_states), dim=1).contiguous()  # [B, L_actual, 512, H]
         L_actual = hs.size(1)
         if L_actual < self.expected_layers:
             pad = self.expected_layers - L_actual
@@ -220,60 +127,8 @@ class RobertaEmbedder(nn.Module):
         elif L_actual > self.expected_layers:
             hs = hs[:, -self.expected_layers:, :, :]
 
-        # True=token, False=pad (flip later if your decoder expects True=PAD)
-        attn_mask_bool = attn_mask.to(torch.bool)
+        attn_mask_bool = attn_mask.to(torch.bool)  # True=token, False=pad (flip later if needed)
         return hs, attn_mask_bool
-
-# def setup_models(device: torch.device, vncorenlp_path="/data2/npl/ICEK/VnCoreNLP"):
-#     py_vncorenlp.download_model(save_dir=vncorenlp_path)
-#     vncore = py_vncorenlp.VnCoreNLP(
-#         annotators=["wseg"],
-#         save_dir=vncorenlp_path,
-#         max_heap_size='-Xmx15g'
-#     )
-#     print("LOADED VNCORENLP!")
-    
-#     # Face detection + embedding
-#     mtcnn = MTCNN(keep_all=True, device=device)
-#     facenet = InceptionResnetV1(pretrained="vggface2").eval().to(device)
-#     print("LOADED FaceNet!")
-
-#     # Global image feature
-#     weights = ResNet152_Weights.IMAGENET1K_V1 
-#     base = resnet152(weights=weights).eval().to(device)
-#     resnet = nn.Sequential(*list(base.children())[:-2]).eval().to(device)
-    
-#     resnet_object = nn.Sequential(*list(base.children())[:-1]).eval().to(device)
-#     print("LOADED ResNet152!")
-
-#     yolo = YOLO("yolov8m.pt")  # tải weight tự động lần đầu
-#     yolo.fuse()                # fuse model for speed
-#     print("LOADED YOLOv8!")
-    
-#     phoBERTlocal = "/data2/npl/ICEK/TnT/phoBERT_large/phobert-large"
-#     tokenizer = AutoTokenizer.from_pretrained(phoBERTlocal, use_fast=False, local_files_only=True)
-#     roberta     = AutoModel    .from_pretrained(phoBERTlocal, use_safetensors=True, local_files_only=True).to(device).eval()
-#     embedder = RobertaEmbedder(roberta, tokenizer, device).to(device)
-#     print("LOADED phoBERT!")
-#     preprocess = Compose([
-#         ToTensor(),
-#         Normalize(mean=[0.485, 0.456, 0.406],
-#                   std=[0.229, 0.224, 0.225])
-#     ])
-
-#     return {
-#         "vncore": vncore,
-#         "mtcnn": mtcnn,
-#         "facenet": facenet,
-#         "resnet": resnet,
-#         "resnet_object": resnet_object,
-#         "roberta": roberta,
-#         "tokenizer": tokenizer,
-#         "embedder": embedder,
-#         "yolo": yolo,
-#         "preprocess": preprocess,
-#         "device": device,
-#     }
 
 def setup_models(device: torch.device, vncorenlp_path="/data2/npl/ICEK/VnCoreNLP"):
     # (Optional) make HF strictly local if all files are on disk
@@ -365,7 +220,7 @@ def segment_text(text: str, model) -> str:
         except Exception as e:
             logging.error(f"Error segmenting text: {e}")
             segmented_sentences.append(sent)
-    return " <SEP> ".join(segmented_sentences)
+    return "<SEP>".join(segmented_sentences)
 
 def _pad_to_len(x: torch.Tensor, target_len: int) -> Tuple[torch.Tensor, torch.Tensor]:
     """
@@ -380,69 +235,6 @@ def _pad_to_len(x: torch.Tensor, target_len: int) -> Tuple[torch.Tensor, torch.T
     mask = torch.zeros(target_len, dtype=torch.bool, device=x.device)
     mask[S:] = True
     return out, mask
-
-# def detect_faces(img: Image.Image, mtcnn: MTCNN, facenet: InceptionResnetV1, device: torch.device, max_faces=4) -> dict:
-#     with torch.no_grad():
-#         faces, probs = mtcnn(img, return_prob=True)
-#     if faces is None or len(faces) == 0:
-#         return {"n_faces": 0, "embeddings": [], "detect_probs": []}
-#     if isinstance(probs, torch.Tensor):
-#         probs = probs.tolist()
-#     facelist = sorted(zip(faces, probs), key=lambda x: x[1], reverse=True)
-#     facelist = facelist[:max_faces]
-
-#     face_tensors = torch.stack([fp[0] for fp in facelist]).to(device)  # (k,3,160,160)
-#     probs_top    = [float(fp[1]) for fp in facelist]
-
-#     with torch.no_grad():
-#         embeds = facenet(face_tensors).cpu().tolist()  # List[k][512]
-#     return {
-#         "n_faces": len(embeds),
-#         "embeddings": embeds,
-#         "detect_probs": probs[: len(embeds)].tolist(),
-#     }
-
-# def detect_objects(image_path: str, model, resnet, preprocess, device):
-#     img = Image.open(image_path).convert("RGB")
-#     results = model(image_path, conf=0.3, iou=0.45, max_det=64, verbose=False, show=False )     
-#     detections = []
-#     if not results:
-#         return detections
-#     res = results[0]                   # take the first Results object
-#     # lấy các tensor
-#     xyxy   = res.boxes.xyxy.cpu()      # shape (N,4)
-#     confs  = res.boxes.conf.cpu()      # shape (N,)
-#     classes= res.boxes.cls.cpu()       # shape (N,)
-#     for i in range(len(xyxy)):
-#         x1, y1, x2, y2 = xyxy[i].tolist()
-#         conf = float(confs[i])
-#         cls  = int(classes[i])
-#         crop = img.crop((x1, y1, x2, y2)).resize((224,224))
-#         tensor = preprocess(crop).unsqueeze(0).to(device)
-#         with torch.no_grad():
-#             feat_tensor = resnet(tensor).squeeze()   # still a Tensor
-#         # convert to plain Python list:
-#             feat = feat_tensor.cpu().tolist()
-#         detections.append(feat)
-#     return detections
-
-# def image_feature(img: Image.Image, resnet: torch.nn.Module, preprocess: Compose, device: torch.device) -> List[float]:
-#     preprocess_img_feat = Compose([
-#     # 1) Resize the shorter side to 256 (preserve aspect)
-#     Resize(256),
-#     # 2) Crop out the central 224×224 patch
-#     CenterCrop(224),
-#     ToTensor(),
-#     Normalize(mean=[0.485, 0.456, 0.406],
-#               std =[0.229, 0.224, 0.225])
-#     ])
-#     tensor = preprocess_img_feat(img).unsqueeze(0).to(device)
-#     with torch.no_grad():
-#         fmap = resnet(tensor)                         # (1,2048,7,7)
-#     fmap = fmap.squeeze(0)                            # (2048,7,7)
-#     # move channel to last dim → (7,7,2048), then flatten to (49,2048)
-#     patches = fmap.permute(1, 2, 0).reshape(-1, 2048)  # (49,2048)
-#     return patches.cpu().tolist() 
 
 def detect_faces(
     img: Image.Image,
