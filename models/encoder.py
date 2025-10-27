@@ -130,10 +130,10 @@ class RobertaEmbedder(torch.nn.Module):
         attn_mask_bool = attn_mask.to(torch.bool)  # True=token, False=pad (flip later if needed)
         return hs, attn_mask_bool
 
-def setup_models(device: torch.device, vncorenlp_path="/data2/npl/ICEK/VnCoreNLP"):
+def setup_models(device: torch.device, vncorenlp_path="/datastore/npl/ICEK/VnCoreNLP"):
     # (Optional) make HF strictly local if all files are on disk
     # os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-
+    print("[DEBUG] SETTING UP MODELS")
     # --- VnCoreNLP ---
     py_vncorenlp.download_model(save_dir=vncorenlp_path)
     vncore = py_vncorenlp.VnCoreNLP(
@@ -141,27 +141,27 @@ def setup_models(device: torch.device, vncorenlp_path="/data2/npl/ICEK/VnCoreNLP
         save_dir=vncorenlp_path,
         max_heap_size='-Xmx15g'
     )
-    print("LOADED VNCORENLP!")
+    print("[DEBUG] LOADED VNCORENLP!")
 
     # --- Face detection + embedding ---
     mtcnn = MTCNN(keep_all=True, device=str(device))
     facenet = InceptionResnetV1(pretrained="vggface2").eval().to(device)
-    print("LOADED FaceNet!")
+    print("[DEBUG] LOADED FaceNet!")
 
     # --- Global / object image features ---
     weights = ResNet152_Weights.IMAGENET1K_V1
     base = resnet152(weights=weights).eval().to(device)
     resnet = nn.Sequential(*list(base.children())[:-2]).eval().to(device)
     resnet_object = nn.Sequential(*list(base.children())[:-1]).eval().to(device)
-    print("LOADED ResNet152!")
+    print("[DEBUG] LOADED ResNet152!")
 
     # --- YOLOv8 ---
     yolo = YOLO("yolov8m.pt")
     yolo.fuse()
-    print("LOADED YOLOv8!")
+    print("[DEBUG] LOADED YOLOv8!")
 
     # --- PhoBERT ---
-    phoBERTlocal = "/data2/npl/ICEK/TnT/phoBERT_large/phobert-large"
+    phoBERTlocal = "/datastore/npl/ICEK/TnT/phoBERT_large/phobert-large"
     tokenizer = AutoTokenizer.from_pretrained(phoBERTlocal, use_fast=False, local_files_only=True)
     # DO NOT force safetensors unless files exist
     roberta   = AutoModel    .from_pretrained(phoBERTlocal, local_files_only=True).eval().to(device)
@@ -181,7 +181,7 @@ def setup_models(device: torch.device, vncorenlp_path="/data2/npl/ICEK/VnCoreNLP
         pass
 
     embedder = RobertaEmbedder(roberta, tokenizer, device).to(device)
-    print("LOADED phoBERT!")
+    print("[DEBUG] LOADED phoBERT!")
 
     preprocess = Compose([
         ToTensor(),
@@ -367,7 +367,7 @@ def process_item(sid: str, item: dict, segmented_context: str,
 
     # Prepare image path; optionally copy to image_out
     img_id = item["image_path"].split("images/")[-1]
-    img_path = f"/data2/npl/ICEK/Wikipedia/images_resized/{img_id}"
+    img_path = f"/datastore/npl/ICEK/Wikipedia/images_resized/{img_id}"
     # print(f"Image Path: {img_path}")
     if image_out:
         os.makedirs(image_out, exist_ok=True)
@@ -540,11 +540,11 @@ def convert_items(items: Dict[str, dict], split: str, models: dict, output_dir: 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Create ViWiki dataset files")
-    parser.add_argument("data_dir", nargs="?", default="/data2/npl/ICEK/Wikipedia/content/ver4", help="Directory with train/val/test JSON")
-    parser.add_argument("output_dir", nargs="?", default="/data2/npl/ICEK/TnT/dataset/content", help="Directory to write converted files")
+    parser.add_argument("data_dir", nargs="?", default="/datastore/npl/ICEK/Wikipedia/content/ver4", help="Directory with train/val/test JSON")
+    parser.add_argument("output_dir", nargs="?", default="/datastore/npl/ICEK/TnT/dataset/content", help="Directory to write converted files")
     parser.add_argument("--image-out", default=None, dest="image_out",
                         help="Optional directory to copy images")
-    parser.add_argument("--vncorenlp", default="/data2/npl/ICEK/VnCoreNLP",
+    parser.add_argument("--vncorenlp", default="/datastore/npl/ICEK/VnCoreNLP",
                         help="Path to VnCoreNLP jar file")
     parser.add_argument("--checkpoint-interval", type=int, default=100,
                         help="Save checkpoint every N items")

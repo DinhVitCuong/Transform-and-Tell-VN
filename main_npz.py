@@ -13,8 +13,8 @@ from models.encoder import setup_models, segment_text, detect_faces, detect_obje
 from tell.modules.token_embedders import AdaptiveEmbedding
 from typing import Dict, Optional, Tuple, Any
 from tell.modules import AdaptiveSoftmax
+from typing import Dict, Optional, Tuple, Any, List
 Image.MAX_IMAGE_PIXELS = None
-import h5py
 import logging
 
 MAX_FACES   = 4
@@ -50,75 +50,39 @@ def _to_cpu(t, dtype=None):
                 t = t.to(dtype)
         return t
 
-def pad_and_collate(batch):
+def pad_and_collate(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     from torch.nn.utils.rnn import pad_sequence
 
-    def pad_context_list(tensors, padding_value=0.0):
-        return pad_sequence(tensors, batch_first=True, padding_value=padding_value)
+    def pad_list(xs: List[torch.Tensor], pad_val=0, dtype=None) -> torch.Tensor:
+        if dtype is not None:
+            xs = [x.to(dtype) for x in xs]
+        return pad_sequence(xs, batch_first=True, padding_value=pad_val)
 
-    images = [item["image"] for item in batch]
-    captions = [item["caption"] for item in batch]
-    caption_ids = [item["caption_ids"] for item in batch]
-    image_paths = [item["image_path"] for item in batch]
-
-    # contexts = {
-    #     "image": pad_context_list([item["contexts"]["image"] for item in batch]),
-    #     "image_mask": pad_context_list([item["contexts"]["image_mask"] for item in batch], padding_value=True),
-    #     "faces": pad_context_list([item["contexts"]["faces"] for item in batch]),
-    #     "faces_mask": pad_context_list([item["contexts"]["faces_mask"] for item in batch], padding_value=True),
-    #     "obj": pad_context_list([item["contexts"]["obj"] for item in batch]),
-    #     "obj_mask": pad_context_list([item["contexts"]["obj_mask"] for item in batch], padding_value=True),
-    #     "article": pad_context_list([item["contexts"]["article"] for item in batch]),
-    #     "article_mask": pad_context_list([item["contexts"]["article_mask"] for item in batch], padding_value=True),
-    # }
     contexts = {
-        # -> [B,49,2048]
-        "image": pad_context_list([it["contexts"]["image"] for it in batch]),
-        # -> [B,49] (bool)
-        "image_mask": pad_context_list([it["contexts"]["image_mask"] for it in batch], padding_value=True),
-
-        # -> [B,4,512]
-        "faces": pad_context_list([it["contexts"]["faces"] for it in batch]),
-        # -> [B,4] (bool)
-        "faces_mask": pad_context_list([it["contexts"]["faces_mask"] for it in batch], padding_value=True),
-
-        # -> [B,64,2048]
-        "obj": pad_context_list([it["contexts"]["obj"] for it in batch]),
-        # -> [B,64] (bool)
-        "obj_mask": pad_context_list([it["contexts"]["obj_mask"] for it in batch], padding_value=True),
-
-        # -> [B,L,S,H] (e.g., [B,25,1024,H])  — không combine
-        "article": pad_context_list([it["contexts"]["article"] for it in batch]),
-        # -> [B,S] (bool, True=PAD)
-        "article_mask": pad_context_list([it["contexts"]["article_mask"] for it in batch], padding_value=True),
+        "image":       torch.stack([b["contexts"]["image"] for b in batch]),                 # [B,49,2048]
+        "image_mask":  torch.stack([b["contexts"]["image_mask"] for b in batch]).to(bool),   # [B,49]
+        "faces":       pad_list([b["contexts"]["faces"] for b in batch], 0.0),               # [B,F,512]
+        "faces_mask":  pad_list([b["contexts"]["faces_mask"] for b in batch], True).to(bool),# [B,F]
+        "obj":         pad_list([b["contexts"]["obj"] for b in batch], 0.0),                 # [B,O,2048]
+        "obj_mask":    pad_list([b["contexts"]["obj_mask"] for b in batch], True).to(bool),  # [B,O]
+        "article":     pad_list([b["contexts"]["article"] for b in batch], 0.0),             # [B,S,1024]
+        "article_mask":pad_list([b["contexts"]["article_mask"] for b in batch], True).to(bool),# [B,S]
     }
-    
-    for k in ("image_mask", "faces_mask", "obj_mask", "article_mask"):
-        contexts[k] = contexts[k].to(torch.bool)
 
-    #CHECK SHAPE
-    # for key in ['image','article','faces','obj']:
-    #     feat = contexts[key]
-    #     mask = contexts[f"{key}_mask"]
-    #     print(f"[DEBUG]: {key:>8} feat: {tuple(feat.shape)}, mask: {tuple(mask.shape)}")
+    caption_ids = pad_list([b["caption_ids"] for b in batch], 0, dtype=torch.long)           # [B,T]
+    ids = torch.tensor([b["id"] for b in batch], dtype=torch.long)
 
-    caption_ids = pad_sequence(caption_ids, batch_first=True, padding_value=0)
-    return {
-        "image": torch.stack(images),
-        "caption": captions,
-        "caption_ids": caption_ids,
-        "contexts": contexts,
-        "image_path": image_paths,
-    }
+    return {"contexts": contexts, "caption_ids": caption_ids, "ids": ids}
 
 class NewsCaptionDataset(Dataset):
-    def __init__(self, data_dir, split, models, max_length=256):
+    def __init__(self, data_dir, cache_dir, split, models, max_length=256):
         super().__init__()
         self.data_dir     = data_dir
         self.split        = split
         self.models       = models
         self.tokenizer    = models.get("tokenizer", None)
         self.max_length   = max_length
+        self.cache_dir    = cache_dir
 
         # Load the raw data
         data_file = os.path.join(data_dir, f"{split}.json")
@@ -151,70 +115,52 @@ class NewsCaptionDataset(Dataset):
         self.embedder = self.models["embedder"]
     def __len__(self):
         return len(self.ids)
-
-    def __getitem__(self, idx):
-        item = self.items[idx]
-
-        segmented_context = []
-        context = item.get("paragraphs", [])
-        caption = item.get("caption", "")
-        for sentence in context:
-            segmented_context.append(segment_text(sentence, self.models["vncore"]))
-        
-        caption = segment_text(caption, self.models["vncore"])
     
-        img_id = item["image_path"].split("images/")[-1]
-        img_path = f"/data2/npl/ICEK/Wikipedia/images_resized/{img_id}"
-        image = Image.open(img_path).convert("RGB")
-        # mtcnn = self.models["mtcnn"]; facenet = self.models["facenet"]; resnet = self.models["resnet"]
-        # resnet_object = self.models["resnet_object"]; yolo = self.models["yolo"]; preprocess = self.models["preprocess"]
-        # embedder = self.models["embedder"]; device = self.models["device"]
-        face_feats, face_mask = detect_faces(image, self.mtcnn, self.facenet, self.device, max_faces=MAX_FACES, pad_to=MAX_FACES)
-        obj_feats, obj_mask = detect_objects(img_path, self.yolo, self.resnet_object, self.preprocess, self.device, max_det=MAX_OBJECTS, pad_to=MAX_OBJECTS)
-        img_feats, img_mask = image_feature(image, self.resnet, self.preprocess, self.device)
-        art_feats_b, attn_mask_b = self.embedder(segmented_context)   
-        art_feats  = art_feats_b[0].contiguous()                    
-        art_mask = (~attn_mask_b[0].bool()).contiguous()
-        # art_feats, art_mask = embedder(segmented_context).cpu().numpy()
-        img_feats  = _to_cpu(img_feats)
-        img_mask   = _to_cpu(img_mask, dtype=torch.bool)
+    def _load_npz(self, path: str) -> Dict[str, np.ndarray]:
+        with np.load(path, allow_pickle=False) as z:
+            needed = [
+                "image","image_mask","faces","faces_mask","obj","obj_mask",
+                "article","article_mask","caption_ids"
+            ]
+            for n in needed:
+                if n not in z.files:
+                    raise KeyError(f"{os.path.basename(path)} missing '{n}'")
+            if z["caption_ids"].size == 0:
+                raise ValueError(f"{os.path.basename(path)} has empty caption_ids; re-run precompute with tokenizer.")
+            return {k: z[k] for k in z.files}
+        
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        fname = f"{idx}.npz"  
+        temp_path =  os.path.join(self.split_dir, fname)
+        path = os.path.join(self.cache_dir, temp_path)
+        arr = self._load_npz(path)
 
-        face_feats = _to_cpu(face_feats)
-        face_mask  = _to_cpu(face_mask, dtype=torch.bool)
+        # Cast to tensors (use fp32 at train time; masks -> bool)
+        image        = torch.from_numpy(arr["image"]).float()              # [49,2048]
+        image_mask   = torch.from_numpy(arr["image_mask"]).to(torch.bool)  # [49]
 
-        obj_feats  = _to_cpu(obj_feats)
-        obj_mask   = _to_cpu(obj_mask,  dtype=torch.bool)
+        faces        = torch.from_numpy(arr["faces"]).float()              # [F,512]
+        faces_mask   = torch.from_numpy(arr["faces_mask"]).to(torch.bool)  # [F]
 
-        art_feats  = _to_cpu(art_feats)               # [S, H] or [B,S,H] depending on your embedder
-        art_mask   = _to_cpu(art_mask, dtype=torch.bool)
-        contexts = {
-            "image": img_feats,
-            "image_mask": img_mask,
-            "faces": face_feats,
-            "faces_mask": face_mask,
-            "obj": obj_feats,
-            "obj_mask": obj_mask,
-            "article": art_feats,
-            "article_mask": art_mask,
-        }
+        obj          = torch.from_numpy(arr["obj"]).float()                # [O,2048]
+        obj_mask     = torch.from_numpy(arr["obj_mask"]).to(torch.bool)    # [O]
 
-        # Tokenize caption (stay on CPU; move to device later)
-        if self.tokenizer is None:
-            # Minimal fallback tokenizer to keep pipeline running
-            cap_len = min(len(caption.split()), self.max_length)
-            caption_ids = torch.randint(low=5, high=30000, size=(cap_len,), dtype=torch.long)
-        else:
-            caption_ids = self.tokenizer.encode(
-                caption, return_tensors="pt", truncation=True, max_length=self.max_length
-            )[0]
+        # article was saved as fp16; cast to fp32 for numerical stability
+        article_np   = arr["article"].astype(np.float32, copy=False)
+        article      = torch.from_numpy(article_np).float()                # [S,1024]
+        article_mask = torch.from_numpy(arr["article_mask"]).to(torch.bool)# [S]
+
+        caption_ids  = torch.from_numpy(arr["caption_ids"]).long()         # [T]
 
         return {
             "id": idx,
-            "image": contexts["image"],  # convenience alias
-            "contexts": contexts,
+            "contexts": {
+                "image": image, "image_mask": image_mask,
+                "faces": faces, "faces_mask": faces_mask,
+                "obj": obj, "obj_mask": obj_mask,
+                "article": article, "article_mask": article_mask,
+            },
             "caption_ids": caption_ids,
-            "caption": caption,
-            "image_path": item["image_path"],
         }
 
 
@@ -441,11 +387,14 @@ class TransformAndTell(nn.Module):
         return (out, final) if return_logprobs else (out, None)
 
 def train_model(config):
+
+    print("[DEBUG] STARTING PREP")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = "cuda"
     models = setup_models(device, config["vncorenlp_path"])
 
     train_loader = DataLoader(
-        NewsCaptionDataset(config["data_dir"], "train", models),
+        NewsCaptionDataset(config["data_dir"], config["cache_dir"], "train", models),
         batch_size=config["batch_size"],
         shuffle=True,
         num_workers=config["num_workers"],
@@ -454,7 +403,7 @@ def train_model(config):
     )
 
     val_loader = DataLoader(
-        NewsCaptionDataset(config["data_dir"], "val", models),
+        NewsCaptionDataset(config["data_dir"], config["cache_dir"], "val", models),
         batch_size=config["batch_size"],
         shuffle=False,
         num_workers=config["num_workers"],
@@ -618,7 +567,7 @@ def evaluate_model(model, models, config):
     device = next(model.parameters()).device
 
     # --- Dataset / Loader ---
-    test_dataset = NewsCaptionDataset(config["data_dir"], "test", models)
+    test_dataset = NewsCaptionDataset(config["data_dir"], config["cache_dir"], "test", models)
     test_loader = DataLoader(
         test_dataset,
         batch_size=config.get("batch_size", 32),
@@ -794,9 +743,10 @@ def load_saved_model(config, model_path, models):
 if __name__ == "__main__":
     # Configuration (parameters from paper and config.yaml)
     config = {
-        "data_dir": "/data2/npl/ICEK/Wikipedia/content/ver4",
-        "output_dir": "/data2/npl/ICEK/TnT/output",
-        "vncorenlp_path": "/data2/npl/ICEK/VnCoreNLP",
+        "data_dir": "/datastore/npl/ICEK/Wikipedia/content/ver4",
+        "cache_dir":  "/datastore/npl/ICEK/TnT/dataset",
+        "output_dir": "/datastore/npl/ICEK/TnT/output",
+        "vncorenlp_path": "/datastore/npl/ICEK/VnCoreNLP",
         "vocab_size": 64001,  # From phoBERT-base tokenizer
         "embed_dim": 1024,    # Hidden size
         "batch_size": 8,
@@ -842,7 +792,11 @@ if __name__ == "__main__":
         "early_stopping_patience": 10, 
         "early_stopping_min_delta": 0.001,
     }
-    
+    print("[DEBUG] ARGS PARSE DONE.")
+    from gpu_select import get_visible_gpu, set_pytorch_device
+    choosen_gpu = get_visible_gpu(vram_used=30000, total_vram=80000)
+    device = set_pytorch_device(choosen_gpu)
+    print(f"[DEBUG] GPU CHOOSEN {choosen_gpu}")
     # Run training
     trained_model, models = train_model(config)
     
