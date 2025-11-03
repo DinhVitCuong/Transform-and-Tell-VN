@@ -13,6 +13,7 @@ from models.encoder import setup_models, segment_text, detect_faces, detect_obje
 from tell.modules.token_embedders import AdaptiveEmbedding
 from typing import Dict, Optional, Tuple, Any
 from tell.modules import AdaptiveSoftmax
+from caption_metrics import evaluate
 from typing import Dict, Optional, Tuple, Any, List
 Image.MAX_IMAGE_PIXELS = None
 import logging
@@ -493,7 +494,52 @@ def train_model(config):
     ce_loss = nn.CrossEntropyLoss(
         ignore_index=config["decoder_params"]["padding_idx"], reduction="sum"
     )
+    # --- IDs & decoding params ---
+    bos_id = int(config["decoder_params"].get("bos_idx", 1))
+    eos_id = int(config["decoder_params"].get("eos_idx", 2))
+    pad_idx = int(config["decoder_params"]["padding_idx"])
+    pad_id = pad_idx
 
+    max_len = int(config.get("max_len", 40))
+    decoding = str(config.get("decoding", "beam")).lower()
+    beam_size = int(config.get("beam_size", 4))
+    length_penalty = float(config.get("length_penalty", 1.0))
+    temperature = float(config.get("temperature", 1.0))
+
+    # --- Helpers: decode tokens back to text ---
+    tok = models.get("tokenizer")
+    vocab = models.get("vocab")
+
+    def _decode_ids(ids):
+        # strip after EOS, drop PAD
+        clean = []
+        for t in ids:
+            if t == pad_id:
+                continue
+            if t == eos_id:
+                break
+            clean.append(int(t))
+
+        if tok is not None:
+            if hasattr(tok, "DecodeIds"):  # SentencePiece style
+                return tok.DecodeIds(clean)
+            if hasattr(tok, "decode"):
+                try:
+                    return tok.decode(clean)
+                except Exception:
+                    pass
+
+        if vocab is not None and hasattr(vocab, "itos"):
+            pieces = [vocab.itos[i] for i in clean if 0 <= i < len(vocab.itos)]
+            s = " ".join(pieces)
+            return (
+                s.replace(" @@ ", "")
+                 .replace(" ,", ",").replace(" .", ".")
+                 .replace(" !", "!").replace(" ?", "?")
+                 .strip()
+            )
+
+        return " ".join(map(str, clean))
     print(f"[DEBUG] num of epoch: {config['epochs']}")
 
     for epoch in range(config["epochs"]):
@@ -546,20 +592,57 @@ def train_model(config):
         avg_grad_norm = (total_grad_norm / num_batches) if num_batches > 0 else 0.0
         print(f"Epoch {epoch+1} | Train NLL/token: {train_avg_nll:.4f} | Tokens: {total_tokens} | AvgGradNorm: {avg_grad_norm:.6f}")
 
-        # ===== Validation (uses the same correct weighting) =====
+        # # ===== Validation (uses the same correct weighting) =====
+        # model.eval()
+        # val_sum_nll = 0.0
+        # val_tokens = 0
+        # with torch.no_grad():
+        #     for batch in tqdm(val_loader, desc="Validating"):
+        #         caption_ids = batch["caption_ids"].to(device, non_blocking=True)
+        #         contexts    = {k: v.to(device, non_blocking=True) for k, v in batch["contexts"].items()}
+
+        #         targets = caption_ids[:, 1:].contiguous().view(-1)
+        #         num_tokens = (targets != config["decoder_params"]["padding_idx"]).sum()
+        #         if num_tokens.item() == 0:
+        #             continue
+
+        #         logits, _ = model(caption_ids[:, :-1], contexts)
+        #         logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
+        #         logits = logits - logits.max(dim=-1, keepdim=True)[0]
+        #         flat_logits = logits.reshape(-1, logits.size(-1))
+
+        #         outputs, new_targets = criterion(flat_logits, targets)
+
+        #         batch_sum_nll = 0.0
+        #         for out, tgt in zip(outputs, new_targets):
+        #             if out is not None and tgt is not None and tgt.numel() > 0:
+        #                 batch_sum_nll = batch_sum_nll + ce_loss(out, tgt)
+
+        #         val_sum_nll += float(batch_sum_nll)
+        #         val_tokens += int(num_tokens)
+
+        # val_nll = (val_sum_nll / val_tokens) if val_tokens > 0 else 0.0
+        # print(f"Epoch {epoch+1} | Val NLL/token: {val_nll:.4f} | Tokens: {val_tokens}")
+                # ===== Validation (uses the same correct weighting) =====
         model.eval()
         val_sum_nll = 0.0
         val_tokens = 0
+
+        # For metrics
+        reference_captions = []
+        candidate_captions = []
+
         with torch.no_grad():
             for batch in tqdm(val_loader, desc="Validating"):
                 caption_ids = batch["caption_ids"].to(device, non_blocking=True)
                 contexts    = {k: v.to(device, non_blocking=True) for k, v in batch["contexts"].items()}
 
                 targets = caption_ids[:, 1:].contiguous().view(-1)
-                num_tokens = (targets != config["decoder_params"]["padding_idx"]).sum()
+                num_tokens = (targets != pad_idx).sum()
                 if num_tokens.item() == 0:
                     continue
 
+                # ----- Loss (same as before) -----
                 logits, _ = model(caption_ids[:, :-1], contexts)
                 logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
                 logits = logits - logits.max(dim=-1, keepdim=True)[0]
@@ -575,8 +658,50 @@ def train_model(config):
                 val_sum_nll += float(batch_sum_nll)
                 val_tokens += int(num_tokens)
 
+                # ----- Generation for metrics -----
+                B = caption_ids.size(0)
+                start_ids = torch.full((B, 1), bos_id, dtype=torch.long, device=device)
+
+                token_seqs, _ = model.generate(
+                    contexts=contexts,
+                    start_ids=start_ids,
+                    max_len=max_len,
+                    eos_id=eos_id,
+                    pad_id=pad_id,
+                    criterion=criterion,
+                    decoding=decoding,
+                    beam_size=beam_size,
+                    length_penalty=length_penalty,
+                    temperature=temperature,
+                    return_logprobs=False,
+                )
+
+                # remove BOS token before decoding
+                gt_ids_batch   = caption_ids[:, 1:].detach().cpu().tolist()
+                pred_ids_batch = token_seqs[:, 1:].detach().cpu().tolist()
+
+                for gt_ids, pred_ids in zip(gt_ids_batch, pred_ids_batch):
+                    reference_captions.append(_decode_ids(gt_ids))
+                    candidate_captions.append(_decode_ids(pred_ids))
+
         val_nll = (val_sum_nll / val_tokens) if val_tokens > 0 else 0.0
         print(f"Epoch {epoch+1} | Val NLL/token: {val_nll:.4f} | Tokens: {val_tokens}")
+
+        # ===== Text metrics =====
+        if len(reference_captions) > 0:
+            metrics = evaluate(reference_captions, candidate_captions)
+            bleu1, bleu2, bleu3, bleu4, meteor, rouge1, rougeL, cider = metrics
+            print(
+                f"Epoch {epoch+1} | "
+                f"BLEU-1: {bleu1:.4f} | BLEU-2: {bleu2:.4f} | "
+                f"BLEU-3: {bleu3:.4f} | BLEU-4: {bleu4:.4f} | "
+                f"METEOR: {meteor:.4f} | "
+                f"ROUGE-1: {rouge1:.4f} | ROUGE-L: {rougeL:.4f} | "
+                f"CIDEr: {cider:.4f}"
+            )
+        else:
+            print("No captions collected for metrics this epoch.")
+
 
         scheduler.step(val_nll)
         if early_stopper.early_stop(val_nll):
@@ -789,7 +914,7 @@ if __name__ == "__main__":
         "embed_dim": 1024,    # Hidden size
         "batch_size": 8,
         "num_workers": 0,
-        "epochs": 40,
+        "epochs": 100,
         "lr": 5e-5,  # Lowered learning rate for stability
         "embedder": {
             "vocab_size": 64001,
