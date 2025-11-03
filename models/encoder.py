@@ -134,10 +134,12 @@ def setup_models(device: torch.device, vncorenlp_path="/datastore/npl/ICEK/VnCor
     # (Optional) make HF strictly local if all files are on disk
     # os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
     print("[DEBUG] SETTING UP MODELS")
+    os.environ.setdefault("TORCH_HOME", "/datastore/npl/ICEK/TnT/torch_cache")
+    torch.hub.set_dir(os.environ["TORCH_HOME"])
     # --- VnCoreNLP ---
     py_vncorenlp.download_model(save_dir=vncorenlp_path)
     vncore = py_vncorenlp.VnCoreNLP(
-        annotators=["wseg"],
+        annotators=["wseg","pos","ner"],
         save_dir=vncorenlp_path,
         max_heap_size='-Xmx15g'
     )

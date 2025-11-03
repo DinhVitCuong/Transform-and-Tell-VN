@@ -77,87 +77,125 @@ def pad_and_collate(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
 class NewsCaptionDataset(Dataset):
     def __init__(self, data_dir, cache_dir, split, models, max_length=256):
         super().__init__()
-        self.data_dir     = data_dir
-        self.split        = split
-        self.models       = models
-        self.tokenizer    = models.get("tokenizer", None)
-        self.max_length   = max_length
-        self.cache_dir    = cache_dir
+        self.data_dir   = data_dir
+        self.split      = split
+        self.models     = models
+        self.tokenizer  = models.get("tokenizer", None)
+        self.max_length = max_length
+        self.cache_dir  = cache_dir
 
-        # Load the raw data
         data_file = os.path.join(data_dir, f"{split}.json")
-        with open(data_file, 'r') as f:
+        with open(data_file, "r") as f:
             self.data = json.load(f)
+
+        # ---- Build items + IDs from JSON ----
         if isinstance(self.data, dict):
-            # Sort keys numerically when possible
             def _key(k):
                 try:
                     return int(k)
                 except Exception:
                     return k
-            self.items = [self.data[k] for k in sorted(self.data.keys(), key=_key)]
+
+            keys_sorted = sorted(self.data.keys(), key=_key)
+            self.items  = [self.data[k] for k in keys_sorted]
+            # "true" IDs, e.g. 4001, 4002, ...
+            self.ids    = [int(k) if str(k).isdigit() else k for k in keys_sorted]
+
         elif isinstance(self.data, list):
             self.items = self.data
+            self.ids   = [item.get("id", i) for i, item in enumerate(self.items)]
         else:
             raise ValueError(f"Unsupported JSON structure in {data_file}: {type(self.data)}")
 
-        # Stable ids for samplers
-        self.ids = list(range(len(self.items)))
+        # ---- Filter out samples whose .npz is missing ----
+        valid_ids = []
+        for fid in self.ids:
+            fname = f"{fid}.npz"
+            path  = os.path.join(self.cache_dir, self.split, fname)
+            if os.path.exists(path):
+                valid_ids.append(fid)
+            else:
+                logging.warning(
+                    f"[WARN] Missing NPZ for split='{self.split}': {fname} "
+                    f"under {self.cache_dir} – skipping this sample."
+                )
 
-        # Setup model for feature extraction
-        self.device = self.models["device"]
-        self.mtcnn = self.models["mtcnn"]
-        self.facenet = self.models["facenet"]
-        self.resnet = self.models["resnet"]
+        self.ids = valid_ids
+        if len(self.ids) == 0:
+            raise RuntimeError(
+                f"No NPZ files found for split '{self.split}' in {self.cache_dir}"
+            )
+
+        # ---- Setup model handles ----
+        self.device        = self.models["device"]
+        self.mtcnn         = self.models["mtcnn"]
+        self.facenet       = self.models["facenet"]
+        self.resnet        = self.models["resnet"]
         self.resnet_object = self.models["resnet_object"]
-        self.yolo = self.models["yolo"]
-        self.preprocess = self.models["preprocess"]
-        self.embedder = self.models["embedder"]
+        self.yolo          = self.models["yolo"]
+        self.preprocess    = self.models["preprocess"]
+        self.embedder      = self.models["embedder"]
+
     def __len__(self):
         return len(self.ids)
-    
+
     def _load_npz(self, path: str) -> Dict[str, np.ndarray]:
         with np.load(path, allow_pickle=False) as z:
             needed = [
-                "image","image_mask","faces","faces_mask","obj","obj_mask",
-                "article","article_mask","caption_ids"
+                "image", "image_mask",
+                "faces", "faces_mask",
+                "obj", "obj_mask",
+                "article", "article_mask",
+                "caption_ids",
             ]
             for n in needed:
                 if n not in z.files:
                     raise KeyError(f"{os.path.basename(path)} missing '{n}'")
             if z["caption_ids"].size == 0:
-                raise ValueError(f"{os.path.basename(path)} has empty caption_ids; re-run precompute with tokenizer.")
+                raise ValueError(
+                    f"{os.path.basename(path)} has empty caption_ids; "
+                    "re-run precompute with tokenizer."
+                )
             return {k: z[k] for k in z.files}
-        
+
     def __getitem__(self, idx: int) -> Dict[str, Any]:
-        fname = f"{idx}.npz"  
-        temp_path =  os.path.join(self.split_dir, fname)
-        path = os.path.join(self.cache_dir, temp_path)
+        file_id = self.ids[idx]                      # e.g. 4001
+        fname   = f"{file_id}.npz"
+        path    = os.path.join(self.cache_dir, self.split, fname)
+
+        # If a file somehow disappears after init, warn & raise
+        if not os.path.exists(path):
+            logging.warning(
+                f"[WARN] NPZ disappeared for split='{self.split}': {path}"
+            )
+            # You *could* return a dummy sample here instead of raising,
+            # but raising is safer so you notice something is wrong.
+            raise FileNotFoundError(path)
+
         arr = self._load_npz(path)
 
-        # Cast to tensors (use fp32 at train time; masks -> bool)
-        image        = torch.from_numpy(arr["image"]).float()              # [49,2048]
-        image_mask   = torch.from_numpy(arr["image_mask"]).to(torch.bool)  # [49]
+        # Cast to tensors
+        image        = torch.from_numpy(arr["image"]).float()
+        image_mask   = torch.from_numpy(arr["image_mask"]).to(torch.bool)
 
-        faces        = torch.from_numpy(arr["faces"]).float()              # [F,512]
-        faces_mask   = torch.from_numpy(arr["faces_mask"]).to(torch.bool)  # [F]
+        faces        = torch.from_numpy(arr["faces"]).float()
+        faces_mask   = torch.from_numpy(arr["faces_mask"]).to(torch.bool)
 
-        obj          = torch.from_numpy(arr["obj"]).float()                # [O,2048]
-        obj_mask     = torch.from_numpy(arr["obj_mask"]).to(torch.bool)    # [O]
+        obj          = torch.from_numpy(arr["obj"]).float()
+        obj_mask     = torch.from_numpy(arr["obj_mask"]).to(torch.bool)
 
-        # article was saved as fp16; cast to fp32 for numerical stability
         article_np   = arr["article"].astype(np.float32, copy=False)
-        article      = torch.from_numpy(article_np).float()                # [S,1024]
-        article_mask = torch.from_numpy(arr["article_mask"]).to(torch.bool)# [S]
+        article      = torch.from_numpy(article_np).float()
+        article_mask = torch.from_numpy(arr["article_mask"]).to(torch.bool)
 
-        caption_ids  = torch.from_numpy(arr["caption_ids"]).long()         # [T]
+        caption_ids  = torch.from_numpy(arr["caption_ids"]).long()
 
         return {
-            "id": idx,
+            "id": file_id,   # return the real ID (4001, ...)
             "contexts": {
                 "image": image, "image_mask": image_mask,
                 "faces": faces, "faces_mask": faces_mask,
-                "obj": obj, "obj_mask": obj_mask,
+                "obj": obj,   "obj_mask": obj_mask,
                 "article": article, "article_mask": article_mask,
             },
             "caption_ids": caption_ids,
@@ -743,7 +781,7 @@ def load_saved_model(config, model_path, models):
 if __name__ == "__main__":
     # Configuration (parameters from paper and config.yaml)
     config = {
-        "data_dir": "/datastore/npl/ICEK/Wikipedia/content/ver4",
+        "data_dir": "/datastore/npl/ICEK/Wikipedia/content/ver5",
         "cache_dir":  "/datastore/npl/ICEK/TnT/dataset",
         "output_dir": "/datastore/npl/ICEK/TnT/output",
         "vncorenlp_path": "/datastore/npl/ICEK/VnCoreNLP",
@@ -793,10 +831,10 @@ if __name__ == "__main__":
         "early_stopping_min_delta": 0.001,
     }
     print("[DEBUG] ARGS PARSE DONE.")
-    from gpu_select import get_visible_gpu, set_pytorch_device
-    choosen_gpu = get_visible_gpu(vram_used=30000, total_vram=80000)
-    device = set_pytorch_device(choosen_gpu)
-    print(f"[DEBUG] GPU CHOOSEN {choosen_gpu}")
+    # from gpu_select import get_visible_gpu, set_pytorch_device
+    # choosen_gpu = get_visible_gpu(vram_used=30000, total_vram=80000)
+    # device = set_pytorch_device(choosen_gpu)
+    # print(f"[DEBUG] GPU CHOOSEN {choosen_gpu}")
     # Run training
     trained_model, models = train_model(config)
     
