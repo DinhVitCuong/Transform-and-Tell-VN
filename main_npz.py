@@ -279,10 +279,27 @@ class TransformAndTell(nn.Module):
             return ((5.0 + t.float()) ** alpha) / (6.0 ** alpha)
 
         def _log_probs(last_h: torch.Tensor) -> torch.Tensor:
-            # why: keep inference numerically stable and respect temperature
+            # keep inference numerically stable and respect temperature
             temp = max(temperature, 1e-5)
             last_h = last_h / temp
-            return criterion.log_prob(last_h)  # [N, V], log-probabilities
+
+            # 1) PyTorch AdaptiveLogSoftmaxWithLoss-style: .log_prob()
+            if hasattr(criterion, "log_prob"):
+                return criterion.log_prob(last_h)  # [N, V]
+
+            # 2) fairseq-style AdaptiveSoftmax: .get_log_prob()
+            if hasattr(criterion, "get_log_prob"):
+                # most implementations accept just (hidden), or (hidden, target=None)
+                try:
+                    return criterion.get_log_prob(last_h)
+                except TypeError:
+                    return criterion.get_log_prob(last_h, None)
+
+            # 3) Neither exists → give a clear error
+            raise RuntimeError(
+                "The AdaptiveSoftmax criterion passed to `generate()` does not "
+                "implement either `.log_prob()` or `.get_log_prob()`."
+            )
 
         def _tile_ctx(ctx: Dict[str, torch.Tensor], k: int) -> Dict[str, torch.Tensor]:
             if k == 1:
