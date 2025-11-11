@@ -985,6 +985,7 @@ if __name__ == "__main__":
         "batch_size": 8,
         "num_workers": 0,
         "epochs": 100,
+        "decoding": "greedy", 
         "lr": 5e-5,  # Lowered learning rate for stability
         "embedder": {
             "vocab_size": 64001,
