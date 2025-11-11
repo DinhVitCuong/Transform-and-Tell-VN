@@ -6,6 +6,8 @@ from torchvision import transforms
 from PIL import Image
 import json
 import os
+import time
+import gc
 from tqdm import tqdm
 # Import necessary components from previous implementations
 from models.decoder import DynamicConvFacesObjectsDecoder
@@ -140,24 +142,78 @@ class NewsCaptionDataset(Dataset):
     def __len__(self):
         return len(self.ids)
 
+    # def _load_npz(self, path: str) -> Dict[str, np.ndarray]:
+    #     with np.load(path, allow_pickle=False) as z:
+    #         needed = [
+    #             "image", "image_mask",
+    #             "faces", "faces_mask",
+    #             "obj", "obj_mask",
+    #             "article", "article_mask",
+    #             "caption_ids",
+    #         ]
+    #         for n in needed:
+    #             if n not in z.files:
+    #                 raise KeyError(f"{os.path.basename(path)} missing '{n}'")
+    #         if z["caption_ids"].size == 0:
+    #             raise ValueError(
+    #                 f"{os.path.basename(path)} has empty caption_ids; "
+    #                 "re-run precompute with tokenizer."
+    #             )
+    #         return {k: z[k] for k in z.files}
     def _load_npz(self, path: str) -> Dict[str, np.ndarray]:
-        with np.load(path, allow_pickle=False) as z:
-            needed = [
-                "image", "image_mask",
-                "faces", "faces_mask",
-                "obj", "obj_mask",
-                "article", "article_mask",
-                "caption_ids",
-            ]
-            for n in needed:
-                if n not in z.files:
-                    raise KeyError(f"{os.path.basename(path)} missing '{n}'")
-            if z["caption_ids"].size == 0:
-                raise ValueError(
-                    f"{os.path.basename(path)} has empty caption_ids; "
-                    "re-run precompute with tokenizer."
-                )
-            return {k: z[k] for k in z.files}
+        """
+        Robust loader:
+        - Retries a few times on 'Too many open files' (Errno 23/24)
+        - Copies arrays out of the NPZ file so no file descriptor is kept alive.
+        """
+        needed = [
+            "image", "image_mask",
+            "faces", "faces_mask",
+            "obj", "obj_mask",
+            "article", "article_mask",
+            "caption_ids",
+        ]
+
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                with np.load(path, allow_pickle=False) as z:
+                    # Check required keys
+                    for n in needed:
+                        if n not in z.files:
+                            raise KeyError(f"{os.path.basename(path)} missing '{n}'")
+
+                    if z["caption_ids"].size == 0:
+                        raise ValueError(
+                            f"{os.path.basename(path)} has empty caption_ids; "
+                            "re-run precompute with tokenizer."
+                        )
+
+                    # IMPORTANT: np.array(..., copy=True) ensures no lazy memmap
+                    out = {k: np.array(z[k], copy=True) for k in needed}
+                # File is closed here because of the context manager
+                return out
+
+            except OSError as e:
+                # 23 = ENFILE (Too many open files in system)
+                # 24 = EMFILE (Too many open files for this process)
+                if e.errno in (23, 24):
+                    logging.warning(
+                        f"[WARN] OSError {e.errno} when opening {path} "
+                        f"(attempt {attempt+1}/{max_retries}): {e}. "
+                        "Forcing GC and retrying..."
+                    )
+                    gc.collect()
+                    time.sleep(0.5)  # small backoff
+                    continue
+                # Other OS errors → re-raise
+                raise
+
+        # If we get here, all attempts failed
+        raise OSError(
+            f"Failed to open {path} after {max_retries} retries "
+            "due to 'Too many open files'."
+        )
 
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         file_id = self.ids[idx]                      # e.g. 4001
@@ -263,11 +319,6 @@ class TransformAndTell(nn.Module):
         Returns:
           (tokens[B, max_len], scores[B]) if return_logprobs else (tokens, None)
         """
-        if criterion is None or not hasattr(criterion, "log_prob"):
-            raise RuntimeError(
-                "AdaptiveSoftmax criterion with `.log_prob(hidden)` is required for generation."
-            )
-
         device = start_ids.device
         decoding = decoding.lower()
         assert decoding in {"greedy", "beam"}
@@ -283,9 +334,10 @@ class TransformAndTell(nn.Module):
             temp = max(temperature, 1e-5)
             last_h = last_h / temp
 
-            # 1) PyTorch AdaptiveLogSoftmaxWithLoss-style: .log_prob()
-            if hasattr(criterion, "log_prob"):
-                return criterion.log_prob(last_h)  # [N, V]
+            # TEMPORARY DISABLE TO MATCH THE AUTHOR MODEL
+            # # 1) PyTorch AdaptiveLogSoftmaxWithLoss-style: .log_prob()
+            # if hasattr(criterion, "log_prob"):
+            #     return criterion.log_prob(last_h)  # [N, V]
 
             # 2) fairseq-style AdaptiveSoftmax: .get_log_prob()
             if hasattr(criterion, "get_log_prob"):
@@ -450,7 +502,7 @@ def train_model(config):
     models = setup_models(device, config["vncorenlp_path"])
 
     train_loader = DataLoader(
-        NewsCaptionDataset(config["data_dir"], config["cache_dir"], "train", models),
+        NewsCaptionDataset(config["data_dir"], config["cache_dir"], "test", models), #TEMPORARY switch to "test" to validate code
         batch_size=config["batch_size"],
         shuffle=True,
         num_workers=config["num_workers"],

@@ -164,3 +164,4 @@ class AdaptiveEmbedding(nn.Module):
 
     def get_output_dim(self) -> int:
         return self.embed_size
+    

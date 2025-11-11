@@ -220,3 +220,48 @@ class AdaptiveSoftmax(nn.Module):
         log_probs = torch.cat(log_probs_list, dim=1)
         log_probs = log_probs.view(batch_size, seq_len, self.vocab_size)
         return log_probs
+    def log_prob(self, X: torch.Tensor) -> torch.Tensor:
+        """
+        Compute full-vocabulary log-probabilities P(w | X) for each position.
+
+        For head words (indices < cutoff[0]): use head log-softmax directly.
+        For tail words (in cluster i): log P(w) = log P(cluster_i) + log P(w | cluster_i).
+
+        Args:
+            X: Tensor of shape (B, T, D) or (N, D).
+
+        Returns:
+            Tensor of shape (B, T, V) if input was 3D, else (N, V).
+        """
+        orig_shape = X.shape
+        is_3d = X.dim() == 3
+
+        X = X.contiguous().view(-1, X.size(-1))
+        # Match training-time path (head sees one dropout; tails see two including inner)
+        X = F.dropout(X, p=self.dropout, training=self.training)
+
+        head_logits = self.head(X)
+        head_lp = self.lsm(head_logits)
+
+        N = head_lp.size(0)
+        V = self.vocab_size
+        out = head_lp.new_empty(N, V)
+
+        # Head words
+        head_cut = self.cutoff[0]
+        out[:, :head_cut] = head_lp[:, :head_cut]
+
+        # Tails: add cluster log-prob to per-cluster log-softmax
+        n_tails = len(self.cutoff) - 1
+        for i in range(n_tails):
+            cluster_lp = head_lp[:, head_cut + i].unsqueeze(1)
+            tail_logits = self.tail[i](X)
+            tail_lp = F.log_softmax(tail_logits, dim=1)
+            lo, hi = self.cutoff[i], self.cutoff[i + 1]
+            out[:, lo:hi] = tail_lp + cluster_lp  # why: hierarchical factorization
+
+        if is_3d:
+            B, T = orig_shape[0], orig_shape[1]
+            out = out.view(B, T, V)
+
+        return out
