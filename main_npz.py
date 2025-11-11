@@ -285,6 +285,7 @@ class TransformAndTell(nn.Module):
             
         return self.decoder(prev_target, contexts, incremental_state)
     
+    
     @torch.no_grad()
     def generate(
         self,
@@ -432,7 +433,7 @@ class TransformAndTell(nn.Module):
         beam_scores = beam_scores.view(B * beam)
         beam_finished = beam_finished.view(B * beam)
 
-        # main loop
+        # main loop | model(caption_ids[:, :-1], contexts)
         while beam_seq.size(1) < max_len:
             logits, _ = self(beam_seq, ctx_beam)                     # (B*beam, t, D)
             lp = _log_probs(logits[:, -1, :])                        # (B*beam, V)
