@@ -103,7 +103,7 @@ class DynamicConvFacesObjectsDecoder(Decoder):
         article = contexts["article"]
         if article.dim() == 4:
             # Accept [B, L, S, H] or [L, B, S, H]; normalize to [B, L, S, H]
-            B_from_target = prev_target.size(0)
+            B_from_target = X.size(0)
             if article.size(0) == B_from_target:
                 # [B, L, S, H]
                 B, L, S, H = article.shape
