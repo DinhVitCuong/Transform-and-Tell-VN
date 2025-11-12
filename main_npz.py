@@ -468,9 +468,9 @@ class TransformAndTell(nn.Module):
 
         for i in range(gen_len):
             if i == 0:
-                prev_target = {self.index: seed_input}
+                prev_target = seed_input
             else:
-                prev_target = {self.index: seed_input[:, -1:]}
+                prev_target = seed_input[:, -1:]
 
             self.decoder.filter_incremental_state(
                 incremental_state, active_idx)
@@ -673,7 +673,7 @@ def train_model(config):
                 continue
 
             optimizer.zero_grad(set_to_none=True)
-            logits, _ = model(caption_ids, contexts)
+            logits, _ = model(caption_ids[:, :-1], contexts)
             
             logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
             logits = logits - logits.max(dim=-1, keepdim=True)[0]
@@ -723,7 +723,7 @@ def train_model(config):
                     continue
 
                 # ----- Loss (same as before) -----
-                logits, _ = model(caption_ids, contexts)
+                logits, _ = model(caption_ids[:, :-1], contexts)
                 logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
                 logits = logits - logits.max(dim=-1, keepdim=True)[0]
                 flat_logits = logits.reshape(-1, logits.size(-1))
@@ -877,7 +877,7 @@ def evaluate_model(model, models, config):
             targets = caption_ids[:, 1:].contiguous().view(-1)
             num_tokens = (targets != pad_idx).sum().item()
             if num_tokens > 0:
-                logits, _ = model(caption_ids, contexts)  # [B, T-1, D]
+                logits, _ = model(caption_ids[:, :-1], contexts)  # [B, T-1, D]
                 logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
                 logits = logits - logits.max(dim=-1, keepdim=True)[0]
                 flat_logits = logits.reshape(-1, logits.size(-1))
