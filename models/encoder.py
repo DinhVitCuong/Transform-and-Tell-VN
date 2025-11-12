@@ -90,14 +90,8 @@ class RobertaEmbedder(torch.nn.Module):
 
     @torch.no_grad()
     def forward(self, texts: List[str]) -> Tuple[torch.Tensor, torch.Tensor]:
-        proc = []
-        for t in texts:
-            t = (t or "").replace("<SEP>", " ")
-            if not t.startswith(" "):
-                t = " " + t
-            proc.append(t)
         batch = self.tok(
-            proc,
+            texts,
             padding="max_length",
             truncation=True,
             max_length=self.target_len,   
@@ -118,17 +112,10 @@ class RobertaEmbedder(torch.nn.Module):
             attention_mask=attn_mask,
             output_hidden_states=True,
         )
-
-        hs = torch.stack(list(out.hidden_states), dim=1).contiguous()  # [B, L_actual, 512, H]
-        L_actual = hs.size(1)
-        if L_actual < self.expected_layers:
-            pad = self.expected_layers - L_actual
-            hs = torch.cat([hs, hs.new_zeros(hs.size(0), pad, hs.size(2), hs.size(3))], dim=1)
-        elif L_actual > self.expected_layers:
-            hs = hs[:, -self.expected_layers:, :, :]
-
+        hs = torch.stack(list(out.hidden_states), dim=1).contiguous()  # [1, L_actual, 512, H]
+        hs_refined = hs.squeeze(0).permute(1, 0, 2) # [L_actial, 25, H]
         attn_mask_bool = attn_mask.to(torch.bool)  # True=token, False=pad (flip later if needed)
-        return hs, attn_mask_bool
+        return hs_refined, attn_mask_bool, input_ids
 
 def setup_models(device: torch.device, vncorenlp_path="/datastore/npl/ICEK/VnCoreNLP"):
     # (Optional) make HF strictly local if all files are on disk

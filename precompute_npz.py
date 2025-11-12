@@ -119,8 +119,11 @@ def precompute_split(
             segmented_context: List[str] = []
             for sentence in item.get("paragraphs", []):
                 segmented_context.append(segment_text(sentence, vncore))
+            concat_context = " ".join(segmented_context).replace("<SEP>", " ")
             caption_raw = item.get("caption", "")
             caption_seg = segment_text(caption_raw, vncore)
+            concat_caption = caption_seg.replace("<SEP>", " ")
+
 
             # ---- image path (adapt to your dataset layout) ----
             if "image_path" in item:
@@ -138,22 +141,18 @@ def precompute_split(
             # ---- vision compute ----
             img_feats, img_mask = image_feature(im, resnet, preproc, device)              # [49,2048], [49]
             face_feats, face_mask = detect_faces(im, mtcnn, facenet, device,
-                                                 max_faces=max_faces, pad_to=max_faces)   # [F,512], [F]
+                                                    max_faces=max_faces, pad_to=max_faces)   # [F,512], [F]
             obj_feats, obj_mask = detect_objects(img_path, yolo, resnet_obj, preproc, device,
-                                                 max_det=max_objects, pad_to=max_objects) # [O,2048], [O]
+                                                    max_det=max_objects, pad_to=max_objects) # [O,2048], [O]
 
             # ---- article encode (final layer) ----
-            try:
-                feats_4d, attn_mask = embedder(segmented_context)    # [1,L,S,H], [1,S]
-            except Exception:
-                feats_4d, attn_mask = embedder([segmented_context])   # fallback
-            final_layer = feats_4d[0, -1].contiguous()                # [S,1024]
+            art_feats, attn_mask, art_ids = embedder(concat_context)    # [L,25,H], [1,S]
             article_pad_mask = (~attn_mask[0].bool()).contiguous()    # [S], True=PAD
 
             # ---- caption ids (optional) ----
             if tokenizer is not None:
                 cap_ids = tokenizer.encode(
-                    caption_seg, return_tensors="pt",
+                    concat_caption, return_tensors="pt",
                     truncation=True, max_length=max_len
                 )[0]
                 cap_ids_np = _to_numpy(cap_ids, dtype=torch.long).astype(np.int64)
@@ -167,7 +166,8 @@ def precompute_split(
                 "faces_mask":   _to_numpy(face_mask,  dtype=torch.bool).astype(np.bool_),
                 "obj":          _to_numpy(obj_feats,  dtype=torch.float32).astype(np.float32),
                 "obj_mask":     _to_numpy(obj_mask,   dtype=torch.bool).astype(np.bool_),
-                "article":      _to_numpy(final_layer, dtype=torch.float16).astype(np.float16),
+                "article":      _to_numpy(art_feats, dtype=torch.float16).astype(np.float16),
+                "article_ids":  _to_numpy(art_ids, dtype=torch.float16).astype(np.float16),
                 "article_mask": _to_numpy(article_pad_mask, dtype=torch.bool).astype(np.bool_),
                 "caption_ids":  cap_ids_np,
             }
@@ -187,11 +187,11 @@ def precompute_split(
 
 def main():
     p = argparse.ArgumentParser("Precompute visual+text features to .npz by JSON key")
-    p.add_argument("--data-dir", default="/data2/npl/ICEK/Wikipedia/content/ver4")
-    p.add_argument("--image-root", default="/data2/npl/ICEK/Wikipedia/images_resized")
-    p.add_argument("--vncorenlp-path", default="/data2/npl/ICEK/VnCoreNLP")
+    p.add_argument("--data-dir", default="/datastore/npl/ICEK/Wikipedia/content/ver5")
+    p.add_argument("--image-root", default="/datastore/npl/ICEK/Wikipedia/image_resized")
+    p.add_argument("--vncorenlp-path", default="/datastore/npl/ICEK/VnCoreNLP")
     p.add_argument("--splits", nargs="+", default=["train", "val", "test"])
-    p.add_argument("--out", default="/data2/npl/ICEK/TnT/dataset")
+    p.add_argument("--out", default="/datastore/npl/ICEK/TnT/new_dataset")
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--max-faces", type=int, default=4)
     p.add_argument("--max-objects", type=int, default=64)

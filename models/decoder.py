@@ -124,8 +124,8 @@ class DynamicConvFacesObjectsDecoder(Decoder):
         #     B, S, H = article.shape
         # else:
         #     raise ValueError(f"contexts['article'] must be 3D/4D, got {article.dim()}D")
-        X_article = torch.stack(article, dim=2)
-        # X_article.shape == [batch_size, seq_len, 13, embed_size]
+
+        print(f"[DEBUG] article shape {article.shape}")
 
         weight = F.softmax(self.article_layer_alpha, dim=0)
         weight = weight.unsqueeze(0).unsqueeze(1).unsqueeze(3)
