@@ -89,7 +89,7 @@ class DynamicConvFacesObjectsDecoder(Decoder):
             self.layer_norm = nn.LayerNorm(embed_dim)
 
         # WEIGHTED SUM FOR ARTICLE:
-        self.article_layer_alpha = nn.Parameter(torch.zeros(25))  # stable init; softmax later
+        self.article_layer_alpha = nn.Parameter(torch.Tensor(25)) 
         self.expected_article_layers = 25  # RoBERTa/PhoBERT-large
         
     def forward(self, prev_target, contexts, incremental_state=None,
@@ -101,29 +101,38 @@ class DynamicConvFacesObjectsDecoder(Decoder):
 
         # WEIGHTED SUM FOR ARTICLE:
         article = contexts["article"]
-        if article.dim() == 4:
-            # Accept [B, L, S, H] or [L, B, S, H]; normalize to [B, L, S, H]
-            B_from_target = X.size(0)
-            if article.size(0) == B_from_target:
-                # [B, L, S, H]
-                B, L, S, H = article.shape
-            elif article.size(1) == B_from_target:
-                # [L, B, S, H] -> [B, L, S, H]
-                L, B, S, H = article.shape
-                article = article.permute(1, 0, 2, 3).contiguous()
-            else:
-                raise ValueError(f"Unexpected article shape {tuple(article.shape)}")
+        # if article.dim() == 4:
+        #     # Accept [B, L, S, H] or [L, B, S, H]; normalize to [B, L, S, H]
+        #     B_from_target = X.size(0)
+        #     if article.size(0) == B_from_target:
+        #         # [B, L, S, H]
+        #         B, L, S, H = article.shape
+        #     elif article.size(1) == B_from_target:
+        #         # [L, B, S, H] -> [B, L, S, H]
+        #         L, B, S, H = article.shape
+        #         article = article.permute(1, 0, 2, 3).contiguous()
+        #     else:
+        #         raise ValueError(f"Unexpected article shape {tuple(article.shape)}")
 
-            # Use as many alphas as layers we have (handles non-large models too)
-            L_used = L
-            alphas = torch.softmax(self.article_layer_alpha[:L_used], dim=0)  # [L]
-            alphas = alphas.view(1, L_used, 1, 1)                             # [1,L,1,1]
-            article = (article[:, :L_used] * alphas).sum(dim=1)               # [B,S,H]
-        elif article.dim() == 3:
-            # Already [B, S, H]
-            B, S, H = article.shape
-        else:
-            raise ValueError(f"contexts['article'] must be 3D/4D, got {article.dim()}D")
+        #     # Use as many alphas as layers we have (handles non-large models too)
+        #     L_used = L
+        #     alphas = torch.softmax(self.article_layer_alpha[:L_used], dim=0)  # [L]
+        #     alphas = alphas.view(1, L_used, 1, 1)                             # [1,L,1,1]
+        #     article = (article[:, :L_used] * alphas).sum(dim=1)               # [B,S,H]
+        # elif article.dim() == 3:
+        #     # Already [B, S, H]
+        #     B, S, H = article.shape
+        # else:
+        #     raise ValueError(f"contexts['article'] must be 3D/4D, got {article.dim()}D")
+        X_article = torch.stack(article, dim=2)
+        # X_article.shape == [batch_size, seq_len, 13, embed_size]
+
+        weight = F.softmax(self.article_layer_alpha, dim=0)
+        weight = weight.unsqueeze(0).unsqueeze(1).unsqueeze(3)
+        # weight.shape == [1, 1, 13, 1]
+
+        X_article = (X_article * weight).sum(dim=2)
+        # X_article.shape == [batch_size, seq_len, embed_size]
 
         # MultiHeadAttention in TnT expects keys/values as TBC: [S, B, C]
         contexts["image"] = contexts["image"].transpose(0, 1).contiguous()            # [S,B,H]

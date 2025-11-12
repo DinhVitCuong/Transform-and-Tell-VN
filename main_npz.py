@@ -673,7 +673,7 @@ def train_model(config):
                 continue
 
             optimizer.zero_grad(set_to_none=True)
-            logits, _ = model(caption_ids[:, :-1], contexts)
+            logits, _ = model(caption_ids, contexts)
             
             logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
             logits = logits - logits.max(dim=-1, keepdim=True)[0]
@@ -723,7 +723,7 @@ def train_model(config):
                     continue
 
                 # ----- Loss (same as before) -----
-                logits, _ = model(caption_ids[:, :-1], contexts)
+                logits, _ = model(caption_ids, contexts)
                 logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
                 logits = logits - logits.max(dim=-1, keepdim=True)[0]
                 flat_logits = logits.reshape(-1, logits.size(-1))
@@ -741,7 +741,7 @@ def train_model(config):
                 # ----- Generation for metrics -----
                 B = caption_ids.size(0)
                 start_ids = torch.full((B, 1), bos_id, dtype=torch.long, device=device)
-                _, token_seqs, attns = model._generate(caption_ids[:, :-1], contexts)
+                _, token_seqs, attns = model._generate(caption_ids, contexts)
 
                 # remove BOS token before decoding
                 gt_ids_batch   = caption_ids[:, 1:].detach().cpu().tolist()
@@ -877,7 +877,7 @@ def evaluate_model(model, models, config):
             targets = caption_ids[:, 1:].contiguous().view(-1)
             num_tokens = (targets != pad_idx).sum().item()
             if num_tokens > 0:
-                logits, _ = model(caption_ids[:, :-1], contexts)  # [B, T-1, D]
+                logits, _ = model(caption_ids, contexts)  # [B, T-1, D]
                 logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
                 logits = logits - logits.max(dim=-1, keepdim=True)[0]
                 flat_logits = logits.reshape(-1, logits.size(-1))
