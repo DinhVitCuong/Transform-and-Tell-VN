@@ -285,258 +285,216 @@ class TransformAndTell(nn.Module):
             
         return self.decoder(prev_target, contexts, incremental_state)
     
-    def generate(self,  # type: ignore
-                 context: Dict[str, torch.LongTensor],
-                 image: torch.Tensor,
-                 face_embeds,
-                 obj_embeds,
-                 metadata: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
-
-        B = image.shape[0]
-        caption = {self.index: context[self.index].new_zeros(B, 2)}
-        caption_ids, _, contexts = self._forward(
-            context, image, caption, face_embeds, obj_embeds)
-
-        _, gen_ids, attns = self._generate(caption_ids, contexts)
-
-        gen_ids = gen_ids.cpu().numpy().tolist()
-        attns_list: List[List[Dict[str, Any]]] = []
-
-        for i, token_ids in enumerate(gen_ids):
-            # Let's process the article text
-            article_ids = context[self.index][i]
-            article_ids = article_ids[article_ids != self.padding_idx]
-            article_ids = article_ids.cpu().numpy()
-            # article_ids.shape == [seq_len]
-
-            # remove <s>
-            if article_ids[0] == self.roberta.task.source_dictionary.bos():
-                article_ids = article_ids[1:]
-
-             # Ignore final </s> token
-            if article_ids[-1] == self.roberta.task.source_dictionary.eos():
-                article_ids = article_ids[:-1]
-
-            # Sanity check. We plus three because we removed <s>, </s> and
-            # the last two attention scores are for no attention and bias
-            assert article_ids.shape[0] == attns[0][0]['article'][i][0].shape[0] - 4
-
-            byte_ids = [int(self.roberta.task.source_dictionary[k])
-                        for k in article_ids]
-            # e.g. [16012, 17163, 447, 247, 82, 4640, 3437]
-
-            byte_strs = [self.roberta.bpe.bpe.decoder.get(token, token)
-                         for token in byte_ids]
-            # e.g. ['Sun', 'rise', 'âĢ', 'Ļ', 's', 'Ġexecutive', 'Ġdirector']
-
-            merged_article = []
-            article_mask = []
-            cursor = 0
-            a: Dict[str, Any] = {}
-            newline = False
-            for j, b in enumerate(byte_strs):
-                # Start a new word
-                if j == 0 or b[0] == 'Ġ' or b[0] == 'Ċ' or newline:
-                    if a:
-                        byte_text = ''.join(a['tokens'])
-                        a['text'] = bytearray([self.roberta.bpe.bpe.byte_decoder[c] for c in byte_text]).decode(
-                            'utf-8', errors=self.roberta.bpe.bpe.errors)
-                        merged_article.append(a)
-                        cursor += 1
-                    # Note that
-                    #   len(attns) == generation_length
-                    #   len(attns[j]) == n_layers
-                    #   attns[j][l] is a dictionary
-                    #   attns[j][l]['article'].shape == [batch_size, target_len, source_len]
-                    #   target_len == 1 since we generate one word at a time
-                    a = {'tokens': [b]}
-                    article_mask.append(cursor)
-                    newline = b[0] == 'Ċ'
-                else:
-                    a['tokens'].append(b)
-                    article_mask.append(cursor)
-            byte_text = ''.join(a['tokens'])
-            a['text'] = bytearray([self.roberta.bpe.bpe.byte_decoder[c] for c in byte_text]).decode(
-                'utf-8', errors=self.roberta.bpe.bpe.errors)
-            merged_article.append(a)
-
-            # Next let's process the caption text
-            attn_dicts: List[Dict[str, Any]] = []
-            # Ignore seed input <s>
-            if token_ids[0] == self.roberta.task.source_dictionary.bos():
-                token_ids = token_ids[1:]  # remove <s>
-            # Now len(token_ids) should be the same of len(attns)
-
-            assert len(attns) == len(token_ids)
-
-            # Ignore final </s> token
-            if token_ids[-1] == self.roberta.task.source_dictionary.eos():
-                token_ids = token_ids[:-1]
-            # Now len(token_ids) should be len(attns) - 1
-
-            byte_ids = [int(self.roberta.task.source_dictionary[k])
-                        for k in token_ids]
-            # e.g. [16012, 17163, 447, 247, 82, 4640, 3437]
-
-            byte_strs = [self.roberta.bpe.bpe.decoder.get(token, token)
-                         for token in byte_ids]
-            # e.g. ['Sun', 'rise', 'âĢ', 'Ļ', 's', 'Ġexecutive', 'Ġdirector']
-
-            # Merge by space
-            a: Dict[str, Any] = {}
-            for j, b in enumerate(byte_strs):
-                # Clean up article attention
-                article_attns = copy.deepcopy(merged_article)
-                start = 0
-                for word in article_attns:
-                    end = start + len(word['tokens'])
-                    layer_attns = []
-                    for layer in range(len(attns[j])):
-                        layer_attns.append(
-                            attns[j][layer]['article'][i][0][start:end].mean())
-                    word['attns'] = layer_attns
-                    start = end
-                    del word['tokens']
-
-                # Start a new word. Ġ is space
-                if j == 0 or b[0] == 'Ġ':
-                    if a:
-                        for l in range(len(a['attns']['image'])):
-                            for modal in ['image', 'faces', 'obj']:
-                                a['attns'][modal][l] /= len(a['tokens'])
-                                a['attns'][modal][l] = a['attns'][modal][l].tolist()
-                            for word in a['attns']['article']:
-                                word['attns'][l] /= len(a['tokens'])
-                                word['attns'][l] = word['attns'][l].tolist()
-                        byte_text = ''.join(a['tokens'])
-                        a['tokens'] = bytearray([self.roberta.bpe.bpe.byte_decoder[c] for c in byte_text]).decode(
-                            'utf-8', errors=self.roberta.bpe.bpe.errors)
-                        attn_dicts.append(a)
-                    # Note that
-                    #   len(attns) == generation_length
-                    #   len(attns[j]) == n_layers
-                    #   attns[j][l] is a dictionary
-                    #   attns[j][l]['article'].shape == [batch_size, target_len, source_len]
-                    #   target_len == 1 since we generate one word at a time
-                    a = {
-                        'tokens': [b],
-                        'attns': {
-                            'article': article_attns,
-                            'image': [attns[j][l]['image'][i][0] for l in range(len(attns[j]))],
-                            'faces': [attns[j][l]['faces'][i][0] for l in range(len(attns[j]))],
-                            'obj': [attns[j][l]['obj'][i][0] for l in range(len(attns[j]))],
-                        }
-                    }
-                else:
-                    a['tokens'].append(b)
-                    for l in range(len(a['attns']['image'])):
-                        for modal in ['image', 'faces', 'obj']:
-                            a['attns'][modal][l] += attns[j][l][modal][i][0]
-                        for w, word in enumerate(a['attns']['article']):
-                            word['attns'][l] += article_attns[w]['attns'][l]
-
-            for l in range(len(a['attns']['image'])):
-                for modal in ['image', 'faces', 'obj']:
-                    a['attns'][modal][l] /= len(a['tokens'])
-                    a['attns'][modal][l] = a['attns'][modal][l].tolist()
-                for word in a['attns']['article']:
-                    word['attns'][l] /= len(a['tokens'])
-                    word['attns'][l] = word['attns'][l].tolist()
-            byte_text = ''.join(a['tokens'])
-            a['tokens'] = bytearray([self.roberta.bpe.bpe.byte_decoder[c] for c in byte_text]).decode(
-                'utf-8', errors=self.roberta.bpe.bpe.errors)
-            attn_dicts.append(a)
-
-            attns_list.append(attn_dicts)
-
-            # gen_texts = [self.roberta.decode(
-            #     x[x != self.padding_idx]) for x in gen_ids]
-
-        return attns_list
     
-    def _generate(self, caption_ids, contexts, attn_idx=None):
-        incremental_state: Dict[str, Any] = {}
-        seed_input = caption_ids[:, 0:1]
-        log_prob_list = []
-        index_path_list = [seed_input]
-        eos = 2
-        active_idx = seed_input[:, -1] != eos
-        full_active_idx = active_idx
-        gen_len = 100
-        B = caption_ids.shape[0]
-        attns = []
+    @torch.no_grad()
+    def generate(
+        self,
+        contexts: Dict[str, torch.Tensor],
+        start_ids: torch.LongTensor,
+        max_len: int,
+        eos_id: int,
+        pad_id: int,
+        *,
+        criterion: Optional[Any] = None,
+        decoding: str = "greedy",           # "greedy" | "beam"
+        temperature: float = 1.0,
+        beam_size: int = 4,
+        length_penalty: float = 1.0,        # >1.0 favors longer, <1.0 shorter
+        return_logprobs: bool = False,
+    ) -> Tuple[torch.LongTensor, Optional[torch.Tensor]]:
+        """
+        Decode captions using AdaptiveSoftmax without constructing a dense V projection.
 
-        for i in range(gen_len):
-            if i == 0:
-                prev_target = {self.index: seed_input}
-            else:
-                prev_target = {self.index: seed_input[:, -1:]}
+        Args:
+          contexts: batch-aligned dict of encoder/visual/text features (B, ...).
+          start_ids: BOS tokens, shape (B, 1).
+          max_len: total output length INCLUDING the given start token(s).
+          eos_id/pad_id: vocabulary ids.
+          criterion: must expose .log_prob(h) where h is (N, D).
+          decoding: "greedy" or "beam".
+          temperature: >0; applied on the last-step hidden before log_prob.
+          beam_size: used when decoding == "beam".
+          length_penalty: beam scoring denominator exponent (GNMT-style).
+          return_logprobs: also return per-sample final logprob scores.
 
-            self.decoder.filter_incremental_state(
-                incremental_state, active_idx)
+        Returns:
+          (tokens[B, max_len], scores[B]) if return_logprobs else (tokens, None)
+        """
+        device = start_ids.device
+        decoding = decoding.lower()
+        assert decoding in {"greedy", "beam"}
 
-            decoder_out = self.decoder(
-                prev_target,
-                contexts,
-                incremental_state=incremental_state)
+        def _length_penalty_fn(t: torch.Tensor, alpha: float) -> torch.Tensor:
+            # why: GNMT length norm to avoid short-hypothesis bias
+            if alpha == 1.0:
+                return torch.ones_like(t, dtype=torch.float, device=device)
+            return ((5.0 + t.float()) ** alpha) / (6.0 ** alpha)
 
-            attns.append(decoder_out[1]['attn'])
+        def _log_probs(last_h: torch.Tensor) -> torch.Tensor:
+            # keep inference numerically stable and respect temperature
+            temp = max(temperature, 1e-5)
+            last_h = last_h / temp
 
-            # We're only interested in the current final word
-            decoder_out = (decoder_out[0][:, -1:], None)
+            # TEMPORARY DISABLE TO MATCH THE AUTHOR MODEL
+            # # 1) PyTorch AdaptiveLogSoftmaxWithLoss-style: .log_prob()
+            # if hasattr(criterion, "log_prob"):
+            #     return criterion.log_prob(last_h)  # [N, V]
 
-            lprobs = self.decoder.get_normalized_probs(
-                decoder_out, log_probs=True)
-            # lprobs.shape == [batch_size, 1, vocab_size]
+            # 2) fairseq-style AdaptiveSoftmax: .get_log_prob()
+            if hasattr(criterion, "get_log_prob"):
+                # most implementations accept just (hidden), or (hidden, target=None)
+                try:
+                    return criterion.get_log_prob(last_h)
+                except TypeError:
+                    return criterion.get_log_prob(last_h, None)
 
-            lprobs = lprobs.squeeze(1)
-            # lprobs.shape == [batch_size, vocab_size]
+            # 3) Neither exists → give a clear error
+            raise RuntimeError(
+                "The AdaptiveSoftmax criterion passed to `generate()` does not "
+                "implement either `.log_prob()` or `.get_log_prob()`."
+            )
 
-            topk_lprobs, topk_indices = lprobs.topk(self.sampling_topk)
-            topk_lprobs = topk_lprobs.div_(self.sampling_temp)
-            # topk_lprobs.shape == [batch_size, topk]
+        def _tile_ctx(ctx: Dict[str, torch.Tensor], k: int) -> Dict[str, torch.Tensor]:
+            if k == 1:
+                return ctx
+            out = {}
+            for name, tens in ctx.items():
+                # (B, ...) -> (B*k, ...)
+                out[name] = tens.repeat_interleave(k, dim=0)
+            return out
 
-            # Take a random sample from those top k
-            topk_probs = topk_lprobs.exp()
-            sampled_index = torch.multinomial(topk_probs, num_samples=1)
-            # sampled_index.shape == [batch_size, 1]
+        B = start_ids.size(0)
+        max_len = int(max_len)
+        assert start_ids.dim() == 2 and start_ids.size(1) >= 1, "start_ids shape must be (B, T0>=1)"
 
-            selected_lprob = topk_lprobs.gather(
-                dim=-1, index=sampled_index)
-            # selected_prob.shape == [batch_size, 1]
+        if decoding == "greedy":
+            seq = start_ids  # (B, t)
+            finished = torch.zeros(B, dtype=torch.bool, device=device)
+            scores = torch.zeros(B, dtype=torch.float, device=device)
 
-            selected_index = topk_indices.gather(
-                dim=-1, index=sampled_index)
-            # selected_index.shape == [batch_size, 1]
+            while seq.size(1) < max_len:
+                logits, _ = self(seq, contexts)         # [B, t, D]
+                last_h = logits[:, -1, :]               # [B, D]
+                lp = _log_probs(last_h)                 # [B, V]
 
-            log_prob = selected_lprob.new_zeros(B, 1)
-            log_prob[full_active_idx] = selected_lprob
+                next_tok = lp.argmax(dim=-1)            # [B]
+                # why: do not change finished sequences further
+                next_tok = torch.where(finished, torch.full_like(next_tok, pad_id), next_tok)
+                step_lp = lp.gather(1, next_tok.unsqueeze(1)).squeeze(1)
+                step_lp = torch.where(finished, torch.zeros_like(step_lp), step_lp)
+                scores += step_lp
 
-            index_path = selected_index.new_full((B, 1), self.padding_idx)
-            index_path[full_active_idx] = selected_index
+                seq = torch.cat([seq, next_tok.unsqueeze(1)], dim=1)
+                finished = finished | (next_tok == eos_id)
+                if bool(finished.all()):
+                    break
 
-            log_prob_list.append(log_prob)
-            index_path_list.append(index_path)
+            # pad tail if early stopped
+            if seq.size(1) < max_len:
+                tail = seq.new_full((B, max_len - seq.size(1)), pad_id)
+                seq = torch.cat([seq, tail], dim=1)
 
-            seed_input = torch.cat([seed_input, selected_index], dim=-1)
+            return (seq, scores) if return_logprobs else (seq, None)
 
-            is_eos = selected_index.squeeze(-1) == eos
-            active_idx = ~is_eos
+        # ---- Beam search ----
+        beam = int(max(1, beam_size))
+        # bootstrap
+        beam_seq = start_ids.repeat_interleave(beam, dim=0)          # (B*beam, t0)
+        beam_scores = torch.zeros(B * beam, dtype=torch.float, device=device)
+        beam_finished = torch.zeros(B * beam, dtype=torch.bool, device=device)
+        ctx_beam = _tile_ctx(contexts, beam)                         # tile all contexts
 
-            full_active_idx[full_active_idx.nonzero()[~active_idx]] = 0
+        # step 1: expand from BOS (gives better initial diversity)
+        cur_len = beam_seq.size(1)
+        logits, _ = self(beam_seq, ctx_beam)                          # (B*beam, t0, D)
+        lp = _log_probs(logits[:, -1, :]).view(B, beam, -1)           # (B, beam, V)
+        # collapse to beam*V for each batch
+        topk = min(beam, lp.size(-1))
+        next_scores, next_ids = torch.topk(lp[:, 0, :], k=topk, dim=-1)  # from the single true beam at t0
+        # seed beams
+        beam_seq = beam_seq.view(B, beam, cur_len)
+        beam_seq = beam_seq[:, :topk, :]                               # (B, topk, t0)
+        next_tokens = next_ids                                         # (B, topk)
+        beam_seq = torch.cat([beam_seq, next_tokens.unsqueeze(-1)], dim=-1)  # (B, topk, t0+1)
+        beam_scores = next_scores                                      # (B, topk)
+        beam_finished = next_tokens.eq(eos_id)                         # (B, topk)
 
-            seed_input = seed_input[active_idx]
+        # if requested beam_size > topk, pad beams deterministically
+        if topk < beam:
+            pad_beams = beam - topk
+            pad_seq = beam_seq[:, :1, :].expand(B, pad_beams, beam_seq.size(-1)).contiguous()
+            pad_scores = torch.full((B, pad_beams), -1e9, device=device)  # dominated
+            pad_finished = torch.ones((B, pad_beams), dtype=torch.bool, device=device)
+            beam_seq = torch.cat([beam_seq, pad_seq], dim=1)
+            beam_scores = torch.cat([beam_scores, pad_scores], dim=1)
+            beam_finished = torch.cat([beam_finished, pad_finished], dim=1)
 
-            if active_idx.sum().item() == 0:
+        beam_seq = beam_seq.view(B * beam, cur_len + 1)
+        beam_scores = beam_scores.view(B * beam)
+        beam_finished = beam_finished.view(B * beam)
+
+        # main loop | model(caption_ids[:, :-1], contexts)
+        while beam_seq.size(1) < max_len:
+            logits, _ = self(beam_seq, ctx_beam)                     # (B*beam, t, D)
+            lp = _log_probs(logits[:, -1, :])                        # (B*beam, V)
+
+            # freeze finished beams: only allow PAD with zero delta
+            if beam_finished.any():
+                lp[beam_finished] = -float("inf")
+                lp[beam_finished, pad_id] = 0.0
+
+            # candidate scores
+            cand_scores = (beam_scores.unsqueeze(1) + lp)            # (B*beam, V)
+            cand_scores = cand_scores.view(B, beam, -1)              # (B, beam, V)
+            cand_scores = cand_scores.view(B, -1)                    # (B, beam*V)
+
+            next_scores, next_pos = torch.topk(cand_scores, k=beam, dim=-1)  # (B, beam)
+            vocab_size = lp.size(-1)
+            next_beam_idx = next_pos // vocab_size                   # (B, beam)
+            next_tokens = next_pos % vocab_size                      # (B, beam)
+
+            # gather previous beam sequences
+            old_seq = beam_seq.view(B, beam, -1)                     # (B, beam, t)
+            gather_idx = next_beam_idx.unsqueeze(-1).expand(-1, -1, old_seq.size(-1))
+            new_seq = torch.gather(old_seq, 1, gather_idx)           # (B, beam, t)
+            new_seq = torch.cat([new_seq, next_tokens.unsqueeze(-1)], dim=-1)  # (B, beam, t+1)
+
+            # update state
+            beam_seq = new_seq.view(B * beam, -1)
+            beam_scores = next_scores.view(B * beam)
+            beam_finished = torch.gather(
+                beam_finished.view(B, beam), 1, next_beam_idx
+            ).contiguous().view(B * beam) | (next_tokens.view(-1) == eos_id)
+
+            if bool(beam_finished.view(B, beam).all()):
                 break
 
-        log_probs = torch.cat(log_prob_list, dim=-1)
-        # log_probs.shape == [batch_size * beam_size, generate_len]
+        # choose best beam per batch with length penalty
+        t = beam_seq.size(1)
+        lp_den = _length_penalty_fn(torch.full((B, beam), t, device=device), length_penalty)
+        final_scores = beam_scores.view(B, beam) / lp_den
+        best = final_scores.argmax(dim=-1)                            # (B,)
+        best_idx = best + torch.arange(B, device=device) * beam
+        out = beam_seq.index_select(0, best_idx)                      # (B, t)
 
-        token_ids = torch.cat(index_path_list, dim=-1)
-        # token_ids.shape == [batch_size * beam_size, generate_len]
+        # pad tail if needed
+        if out.size(1) < max_len:
+            tail = out.new_full((B, max_len - out.size(1)), pad_id)
+            out = torch.cat([out, tail], dim=1)
 
-        return log_probs, token_ids, attns
+        # ensure sequences after first EOS are padded (clean output)
+        eos_mask = (out == eos_id)
+        if eos_mask.any():
+            # first EOS position per row
+            first_eos = torch.where(eos_mask, torch.arange(out.size(1), device=device), out.new_full(out.shape, out.size(1))).min(dim=1).values
+            for i in range(B):
+                pos = int(first_eos[i].item())
+                if pos < out.size(1) - 1:
+                    out[i, pos + 1 :] = pad_id
+
+        final = final_scores.gather(1, best.unsqueeze(1)).squeeze(1)
+        return (out, final) if return_logprobs else (out, None)
+
 def train_model(config):
 
     print("[DEBUG] STARTING PREP")
@@ -704,6 +662,38 @@ def train_model(config):
         avg_grad_norm = (total_grad_norm / num_batches) if num_batches > 0 else 0.0
         print(f"Epoch {epoch+1} | Train NLL/token: {train_avg_nll:.4f} | Tokens: {total_tokens} | AvgGradNorm: {avg_grad_norm:.6f}")
 
+        # # ===== Validation (uses the same correct weighting) =====
+        # model.eval()
+        # val_sum_nll = 0.0
+        # val_tokens = 0
+        # with torch.no_grad():
+        #     for batch in tqdm(val_loader, desc="Validating"):
+        #         caption_ids = batch["caption_ids"].to(device, non_blocking=True)
+        #         contexts    = {k: v.to(device, non_blocking=True) for k, v in batch["contexts"].items()}
+
+        #         targets = caption_ids[:, 1:].contiguous().view(-1)
+        #         num_tokens = (targets != config["decoder_params"]["padding_idx"]).sum()
+        #         if num_tokens.item() == 0:
+        #             continue
+
+        #         logits, _ = model(caption_ids[:, :-1], contexts)
+        #         logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
+        #         logits = logits - logits.max(dim=-1, keepdim=True)[0]
+        #         flat_logits = logits.reshape(-1, logits.size(-1))
+
+        #         outputs, new_targets = criterion(flat_logits, targets)
+
+        #         batch_sum_nll = 0.0
+        #         for out, tgt in zip(outputs, new_targets):
+        #             if out is not None and tgt is not None and tgt.numel() > 0:
+        #                 batch_sum_nll = batch_sum_nll + ce_loss(out, tgt)
+
+        #         val_sum_nll += float(batch_sum_nll)
+        #         val_tokens += int(num_tokens)
+
+        # val_nll = (val_sum_nll / val_tokens) if val_tokens > 0 else 0.0
+        # print(f"Epoch {epoch+1} | Val NLL/token: {val_nll:.4f} | Tokens: {val_tokens}")
+                # ===== Validation (uses the same correct weighting) =====
         model.eval()
         val_sum_nll = 0.0
         val_tokens = 0
@@ -741,7 +731,19 @@ def train_model(config):
                 # ----- Generation for metrics -----
                 B = caption_ids.size(0)
                 start_ids = torch.full((B, 1), bos_id, dtype=torch.long, device=device)
-                _, token_seqs, attns = model._generate(caption_ids[:, :-1], contexts)
+                token_seqs, _ = model.generate(
+                    contexts=contexts,
+                    start_ids=start_ids,
+                    max_len=max_len,
+                    eos_id=eos_id,
+                    pad_id=pad_id,
+                    criterion=criterion,
+                    decoding=decoding,
+                    beam_size=beam_size,
+                    length_penalty=length_penalty,
+                    temperature=temperature,
+                    return_logprobs=False,
+                )
 
                 # remove BOS token before decoding
                 gt_ids_batch   = caption_ids[:, 1:].detach().cpu().tolist()
