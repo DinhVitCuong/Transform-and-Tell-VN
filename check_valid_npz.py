@@ -61,5 +61,9 @@ def _load_npz( path: str) -> Dict[str, np.ndarray]:
         )
 
 
-temp = _load_npz("/datastore/npl/ICEK/TnT/new_dataset/train/4000.npz")
+temp = _load_npz("/datastore/npl/ICEK/TnT/new_dataset/train/50000.npz")
 print(temp)
+print("--- [DEBUG] Printing array shapes ---")
+for key, array in temp.items():
+    print(f"{key}: {array.shape}")
+print("-----------------------------------")

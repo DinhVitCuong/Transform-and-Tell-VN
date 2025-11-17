@@ -111,7 +111,7 @@ def precompute_split(
         if (not overwrite) and os.path.exists(out_path):
             ok += 1
             if i % 100 == 0 or i == total:
-                print(f"[{split}] {i}/{total} (skip existing) ✓")
+                print(f"[{split}] {i}/{total} (skip existing) ✓", flush=True)
             continue
 
         try:
@@ -177,7 +177,7 @@ def precompute_split(
 
             if i % 100 == 0 or i == total:
                 elapsed = time.time() - start
-                print(f"[{split}] {i}/{total} ✓ ok={ok} fail={fail} elapsed={elapsed/60:.1f}m")
+                print(f"[{split}] {i}/{total} ✓ ok={ok} fail={fail} elapsed={elapsed/60:.1f}m", flush=True)
 
         except Exception as e:
             fail += 1

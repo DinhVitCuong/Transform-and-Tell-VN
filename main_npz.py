@@ -974,7 +974,7 @@ if __name__ == "__main__":
     # Configuration (parameters from paper and config.yaml)
     config = {
         "data_dir": "/datastore/npl/ICEK/Wikipedia/content/ver5",
-        "cache_dir":  "/datastore/npl/ICEK/TnT/dataset",
+        "cache_dir":  "/datastore/npl/ICEK/TnT/new_dataset",
         "output_dir": "/datastore/npl/ICEK/TnT/output",
         "vncorenlp_path": "/datastore/npl/ICEK/VnCoreNLP",
         "vocab_size": 64001,  # From phoBERT-base tokenizer
