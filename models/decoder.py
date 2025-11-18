@@ -92,54 +92,30 @@ class DynamicConvFacesObjectsDecoder(Decoder):
         self.article_layer_alpha = nn.Parameter(torch.Tensor(25)) 
         self.expected_article_layers = 25  # RoBERTa/PhoBERT-large
         
-    def forward(self, prev_target, contexts, incremental_state=None,
+    def forward(self, prev_target, contexts, incremental_state=None, mode = "train",
                 use_layers=None, **kwargs):
 
         # Embed tokens
         X = self.embedder(prev_target)
         # X = self.embedder(prev_target, incremental_state=incremental_state)
+        if mode == "train": 
+            # WEIGHTED SUM FOR ARTICLE:
+            X_article = contexts["article"]
+            # print(f"[DEBUG] article shape {X_article.shape}")
 
-        # WEIGHTED SUM FOR ARTICLE:
-        article = contexts["article"]
-        # if article.dim() == 4:
-        #     # Accept [B, L, S, H] or [L, B, S, H]; normalize to [B, L, S, H]
-        #     B_from_target = X.size(0)
-        #     if article.size(0) == B_from_target:
-        #         # [B, L, S, H]
-        #         B, L, S, H = article.shape
-        #     elif article.size(1) == B_from_target:
-        #         # [L, B, S, H] -> [B, L, S, H]
-        #         L, B, S, H = article.shape
-        #         article = article.permute(1, 0, 2, 3).contiguous()
-        #     else:
-        #         raise ValueError(f"Unexpected article shape {tuple(article.shape)}")
+            weight = F.softmax(self.article_layer_alpha, dim=0)
+            weight = weight.unsqueeze(0).unsqueeze(1).unsqueeze(3)
+            # weight.shape == [1, 1, 25, 1]
 
-        #     # Use as many alphas as layers we have (handles non-large models too)
-        #     L_used = L
-        #     alphas = torch.softmax(self.article_layer_alpha[:L_used], dim=0)  # [L]
-        #     alphas = alphas.view(1, L_used, 1, 1)                             # [1,L,1,1]
-        #     article = (article[:, :L_used] * alphas).sum(dim=1)               # [B,S,H]
-        # elif article.dim() == 3:
-        #     # Already [B, S, H]
-        #     B, S, H = article.shape
-        # else:
-        #     raise ValueError(f"contexts['article'] must be 3D/4D, got {article.dim()}D")
+            X_article = (X_article * weight).sum(dim=2)
+            # X_article.shape == [batch_size, seq_len, embed_size]
 
-        print(f"[DEBUG] article shape {article.shape}")
-
-        weight = F.softmax(self.article_layer_alpha, dim=0)
-        weight = weight.unsqueeze(0).unsqueeze(1).unsqueeze(3)
-        # weight.shape == [1, 1, 13, 1]
-
-        X_article = (X_article * weight).sum(dim=2)
-        # X_article.shape == [batch_size, seq_len, embed_size]
-
-        # MultiHeadAttention in TnT expects keys/values as TBC: [S, B, C]
-        contexts["image"] = contexts["image"].transpose(0, 1).contiguous()            # [S,B,H]
-        contexts["article"] = article.transpose(0, 1).contiguous()            # [S,B,H]
-        contexts["faces"] = contexts["faces"].transpose(0, 1).contiguous()            # [S,B,H]
-        contexts["obj"] = contexts["obj"].transpose(0, 1).contiguous()            # [S,B,H]
-        # (Keep mask as [B,S]; no change)
+            # MultiHeadAttention in TnT expects keys/values as TBC: [S, B, C]
+            contexts["image"] = contexts["image"].transpose(0, 1).contiguous()            # [S,B,H]
+            contexts["article"] = X_article.transpose(0, 1).contiguous()            # [S,B,H]
+            contexts["faces"] = contexts["faces"].transpose(0, 1).contiguous()            # [S,B,H]
+            contexts["obj"] = contexts["obj"].transpose(0, 1).contiguous()            # [S,B,H]
+            # (Keep mask as [B,S]; no change)
         # DEBUG
         # for key in ['image','article','faces','obj']:
         #     feat = contexts[key]
@@ -191,6 +167,25 @@ class DynamicConvFacesObjectsDecoder(Decoder):
         """Maximum output length supported by the decoder."""
         return self.max_target_positions
 
+    def transpose(self, contexts):
+        # WEIGHTED SUM FOR ARTICLE:
+        X_article = contexts["article"]
+        # print(f"[DEBUG] article shape {X_article.shape}")
+
+        weight = F.softmax(self.article_layer_alpha, dim=0)
+        weight = weight.unsqueeze(0).unsqueeze(1).unsqueeze(3)
+        # weight.shape == [1, 1, 13, 1]
+
+        X_article = (X_article * weight).sum(dim=2)
+        # X_article.shape == [batch_size, seq_len, embed_size]
+
+        # MultiHeadAttention in TnT expects keys/values as TBC: [S, B, C]
+        contexts["image"] = contexts["image"].transpose(0, 1).contiguous()            # [S,B,H]
+        contexts["article"] = X_article.transpose(0, 1).contiguous()            # [S,B,H]
+        contexts["faces"] = contexts["faces"].transpose(0, 1).contiguous()            # [S,B,H]
+        contexts["obj"] = contexts["obj"].transpose(0, 1).contiguous()  
+        return contexts
+    
     def buffered_future_mask(self, tensor):
         dim = tensor.size(0)
         if not hasattr(self, '_future_mask') or self._future_mask is None or self._future_mask.device != tensor.device:

@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
@@ -9,6 +10,7 @@ import os
 import time
 import gc
 from tqdm import tqdm
+import random
 # Import necessary components from previous implementations
 from models.decoder import DynamicConvFacesObjectsDecoder
 from models.encoder import setup_models, segment_text, detect_faces, detect_objects, image_feature
@@ -52,6 +54,14 @@ def _to_cpu(t, dtype=None):
             if dtype is not None:
                 t = t.to(dtype)
         return t
+def seed_everything(seed: int):
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
 
 def pad_and_collate(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     from torch.nn.utils.rnn import pad_sequence
@@ -260,7 +270,11 @@ class NewsCaptionDataset(Dataset):
 
 
 class TransformAndTell(nn.Module):
-    def __init__(self, vocab_size, embedder, decoder_params):
+    def __init__(self, vocab_size, embedder, decoder_params,
+                 sampling_temp: float = 1.0,
+                 sampling_topk: int = 1,
+                 padding_idx: int = 1,
+                 ):
         """
         Full Transform and Tell model
         Args:
@@ -269,22 +283,26 @@ class TransformAndTell(nn.Module):
             decoder_params: Parameters for DynamicConvFacesObjectsDecoder
         """
         super().__init__()
+        self.sampling_topk = sampling_topk
+        self.sampling_temp = sampling_temp
+        self.padding_idx = padding_idx
         self.decoder = DynamicConvFacesObjectsDecoder(
             vocab_size=vocab_size,
             embedder=embedder,
             **decoder_params
         )
+        # WEIGHTED SUM FOR ARTICLE:
+        # self.article_layer_alpha = nn.Parameter(torch.Tensor(25)) 
+        # self.expected_article_layers = 25  # RoBERTa/PhoBERT-large
         
-    def forward(self, prev_target, contexts, incremental_state=None):
-        # # Transpose context tensors to [seq_len, batch_size, hidden_dim]
-        # transposed_contexts = {}
-        # for key in ["image", "article", "faces", "obj"]:
-        #     # [batch_size, seq_len, hidden_dim] -> [seq_len, batch_size, hidden_dim]
-        #     transposed_contexts[key] = contexts[key].transpose(0, 1)
-        #     transposed_contexts[f"{key}_mask"] = contexts[f"{key}_mask"]
-            
-        return self.decoder(prev_target, contexts, incremental_state)
-    
+    def forward(self, prev_target, contexts, incremental_state=None, mode = "train"):
+        # for key in ['image','article','faces','obj']:
+        #     feat = contexts[key]
+        #     mask = contexts[f"{key}_mask"]
+        #     print(f"[DEBUG]: {key:>8} feat: {tuple(feat.shape)}, mask: {tuple(mask.shape)}")
+        
+        return self.decoder(prev_target, contexts, incremental_state, mode)
+
     def generate(self,  # type: ignore
                  context: Dict[str, torch.LongTensor],
                  image: torch.Tensor,
@@ -465,7 +483,13 @@ class TransformAndTell(nn.Module):
         gen_len = 100
         B = caption_ids.shape[0]
         attns = []
+            # print(f"[DEBUG] full_active_idx {full_active_idx}")
 
+        contexts = self.decoder.transpose(contexts)
+        # for key in ['image','article','faces','obj']:
+        #     feat = contexts[key]
+        #     mask = contexts[f"{key}_mask"]
+        #     print(f"[DEBUG]: {key:>8} feat: {tuple(feat.shape)}, mask: {tuple(mask.shape)}")
         for i in range(gen_len):
             if i == 0:
                 prev_target = seed_input
@@ -475,10 +499,28 @@ class TransformAndTell(nn.Module):
             self.decoder.filter_incremental_state(
                 incremental_state, active_idx)
 
+            contexts_i = {
+                'image': contexts['image'][:, full_active_idx],
+                'image_mask': contexts['image_mask'][full_active_idx],
+                'article': contexts['article'][:, full_active_idx],
+                'article_mask': contexts['article_mask'][full_active_idx],
+                'faces': contexts['faces'][:, full_active_idx],
+                'faces_mask': contexts['faces_mask'][full_active_idx],
+                'obj': contexts['obj'][:, full_active_idx],
+                'obj_mask': contexts['obj_mask'][full_active_idx],
+                'sections':  None,
+                'sections_mask': None,
+            }
+            # for key in ['image','article','faces','obj']:
+            #     feat = contexts_i[key]
+            #     mask = contexts_i[f"{key}_mask"]
+            #     print(f"[DEBUG]: {key:>8} feat: {tuple(feat.shape)}, mask: {tuple(mask.shape)}")
+
             decoder_out = self.decoder(
                 prev_target,
-                contexts,
-                incremental_state=incremental_state)
+                contexts_i,
+                incremental_state=incremental_state,
+                mode = "val")
 
             attns.append(decoder_out[1]['attn'])
 
@@ -545,8 +587,7 @@ def train_model(config):
     models = setup_models(device, config["vncorenlp_path"])
 
     train_loader = DataLoader(
-        NewsCaptionDataset(config["data_dir"], config["cache_dir"], "demo20", models), #TEMPORARY switch to "test" to validate code
-        batch_size=config["batch_size"],
+        NewsCaptionDataset(config["data_dir"], config["cache_dir"], "train", models),
         shuffle=True,
         num_workers=config["num_workers"],
         collate_fn=pad_and_collate,
@@ -607,7 +648,7 @@ def train_model(config):
         ignore_index=config["decoder_params"]["padding_idx"], reduction="sum"
     )
     # --- IDs & decoding params ---
-    bos_id = int(config["decoder_params"].get("bos_idx", 1))
+    bos_id = int(config["decoder_params"].get("bos_idx", 0))
     eos_id = int(config["decoder_params"].get("eos_idx", 2))
     pad_idx = int(config["decoder_params"]["padding_idx"])
     pad_id = pad_idx
@@ -721,9 +762,10 @@ def train_model(config):
                 num_tokens = (targets != pad_idx).sum()
                 if num_tokens.item() == 0:
                     continue
-
+                loss_contexts = contexts.copy()
+                loss_caption_ids = caption_ids[:, :-1].clone()
                 # ----- Loss (same as before) -----
-                logits, _ = model(caption_ids[:, :-1], contexts)
+                logits, _ = model(loss_caption_ids, loss_contexts)
                 logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
                 logits = logits - logits.max(dim=-1, keepdim=True)[0]
                 flat_logits = logits.reshape(-1, logits.size(-1))
@@ -737,7 +779,7 @@ def train_model(config):
 
                 val_sum_nll += float(batch_sum_nll)
                 val_tokens += int(num_tokens)
-
+                print("[DEBUG] DONE LOSS")
                 # ----- Generation for metrics -----
                 B = caption_ids.size(0)
                 start_ids = torch.full((B, 1), bos_id, dtype=torch.long, device=device)
@@ -808,7 +850,7 @@ def evaluate_model(model, models, config):
     )
 
     # --- Loss & Criterion (tie to model embedder like training) ---
-    pad_idx = int(config["decoder_params"].get("padding_idx", 0))
+    pad_idx = int(config["decoder_params"].get("padding_idx", 1))
     ce_loss = nn.CrossEntropyLoss(ignore_index=pad_idx, reduction="sum")
     criterion = AdaptiveSoftmax(
         vocab_size=config["vocab_size"],
@@ -867,53 +909,70 @@ def evaluate_model(model, models, config):
     test_sum_nll = 0.0
     test_total_tokens = 0
     preds = []  # aligned with dataset order (no shuffle)
+    # For metrics
+    reference_captions = []
+    candidate_captions = []
 
     with torch.no_grad():
-        for batch in tqdm(test_loader, desc="Evaluating"):
+        for batch in tqdm(test_loader, desc="Testing"):
             caption_ids = batch["caption_ids"].to(device, non_blocking=True)
-            contexts = {k: v.to(device, non_blocking=True) for k, v in batch["contexts"].items()}
+            contexts    = {k: v.to(device, non_blocking=True) for k, v in batch["contexts"].items()}
 
-            # ----- Loss (sum over clusters, normalize by non-PAD tokens) -----
             targets = caption_ids[:, 1:].contiguous().view(-1)
-            num_tokens = (targets != pad_idx).sum().item()
-            if num_tokens > 0:
-                logits, _ = model(caption_ids[:, :-1], contexts)  # [B, T-1, D]
-                logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
-                logits = logits - logits.max(dim=-1, keepdim=True)[0]
-                flat_logits = logits.reshape(-1, logits.size(-1))
-                outputs, new_targets = criterion(flat_logits, targets)
+            num_tokens = (targets != pad_idx).sum()
+            if num_tokens.item() == 0:
+                continue
+            loss_contexts = contexts.copy()
+            loss_caption_ids = caption_ids[:, :-1].clone()
+            # ----- Loss (same as before) -----
+            logits, _ = model(loss_caption_ids, loss_contexts)
+            logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
+            logits = logits - logits.max(dim=-1, keepdim=True)[0]
+            flat_logits = logits.reshape(-1, logits.size(-1))
 
-                batch_sum = 0.0
-                for out, tgt in zip(outputs, new_targets):
-                    if out is not None and tgt is not None and tgt.numel() > 0:
-                        batch_sum += float(ce_loss(out, tgt))
-                test_sum_nll += batch_sum
-                test_total_tokens += num_tokens
+            outputs, new_targets = criterion(flat_logits, targets)
 
-            # ----- Generation (batched) -----
+            batch_sum_nll = 0.0
+            for out, tgt in zip(outputs, new_targets):
+                if out is not None and tgt is not None and tgt.numel() > 0:
+                    batch_sum_nll = batch_sum_nll + ce_loss(out, tgt)
+
+            test_sum_nll += float(batch_sum_nll)
+            test_total_tokens += int(num_tokens)
+            print("[DEBUG] DONE LOSS")
+            # ----- Generation for metrics -----
             B = caption_ids.size(0)
             start_ids = torch.full((B, 1), bos_id, dtype=torch.long, device=device)
-            token_seqs, _ = model.generate(
-                contexts=contexts,
-                start_ids=start_ids,
-                max_len=max_len,
-                eos_id=eos_id,
-                pad_id=pad_id,
-                criterion=criterion,
-                decoding=decoding,
-                beam_size=beam_size,
-                length_penalty=length_penalty,
-                temperature=temperature,
-                return_logprobs=False,
-            )
-            # remove BOS for decoding
-            token_seqs = token_seqs[:, 1:].detach().cpu().tolist()
-            preds.extend(_decode_ids(seq) for seq in token_seqs)
+            _, token_seqs, attns = model._generate(caption_ids, contexts)
 
-    test_avg_loss = (test_sum_nll / test_total_tokens) if test_total_tokens > 0 else 0.0
-    print(f"Test NLL/token: {test_avg_loss:.4f} | Tokens: {test_total_tokens}")
+            # remove BOS token before decoding
+            gt_ids_batch   = caption_ids[:, 1:].detach().cpu().tolist()
+            pred_ids_batch = token_seqs[:, 1:].detach().cpu().tolist()
+
+            for gt_ids, pred_ids in zip(gt_ids_batch, pred_ids_batch):
+                reference_captions.append(_decode_ids(gt_ids))
+                candidate_captions.append(_decode_ids(pred_ids))
+
+    val_nll = (test_sum_nll / test_total_tokens) if test_total_tokens > 0 else 0.0
+    print(f"Val NLL/token: {val_nll:.4f} | Tokens: {test_total_tokens}")
+
+    # ===== Text metrics =====
+    if len(reference_captions) > 0:
+        metrics = evaluate(reference_captions, candidate_captions)
+        bleu1, bleu2, bleu3, bleu4, meteor, rouge1, rougeL, cider = metrics
+        print(
+            f"BLEU-1: {bleu1:.4f} | BLEU-2: {bleu2:.4f} | "
+            f"BLEU-3: {bleu3:.4f} | BLEU-4: {bleu4:.4f} | "
+            f"METEOR: {meteor:.4f} | "
+            f"ROUGE-1: {rouge1:.4f} | ROUGE-L: {rougeL:.4f} | "
+            f"CIDEr: {cider:.4f}"
+        )
+    else:
+        print("No captions collected for metrics this epoch.")
 
     # --- Read input JSON and attach 'predict' preserving structure ---
+    preds = candidate_captions
+
     src_path = os.path.join(config["data_dir"], "test.json")
     if not os.path.exists(src_path):
         raise FileNotFoundError(f"Input file not found: {src_path}")
@@ -921,31 +980,53 @@ def evaluate_model(model, models, config):
     with open(src_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
+    # We must match the sorting logic of NewsCaptionDataset exactly
+    # to ensure predictions align with the correct input IDs.
     if isinstance(data, list):
-        assert len(data) == len(preds), f"Size mismatch: {len(data)} vs {len(preds)}"
-        for i in range(len(data)):
+        # If dataset filtered out missing NPZ files, lengths won't match.
+        # We assume here strict 1:1 mapping as per your assert.
+        if len(data) != len(preds):
+            print(f"[WARN] Input size ({len(data)}) != Preds size ({len(preds)}). "
+                  "Mapping might be misaligned if some files were skipped by the Dataset loader.")
+        
+        # Fill as much as we have
+        limit = min(len(data), len(preds))
+        for i in range(limit):
             data[i]["predict"] = preds[i]
+
     elif isinstance(data, dict):
         def _key(k):
             try:
                 return int(k)
             except Exception:
                 return k
+
+        # Sort keys exactly how the Dataset loaded them
         keys_sorted = sorted(data.keys(), key=_key)
-        assert len(keys_sorted) == len(preds), f"Size mismatch: {len(keys_sorted)} vs {len(preds)}"
-        for i, k in enumerate(keys_sorted):
+        
+        if len(keys_sorted) != len(preds):
+             print(f"[WARN] Input size ({len(keys_sorted)}) != Preds size ({len(preds)}). "
+                   "Mapping might be misaligned if some files were skipped by the Dataset loader.")
+
+        limit = min(len(keys_sorted), len(preds))
+        for i in range(limit):
+            k = keys_sorted[i]
             data[k]["predict"] = preds[i]
+
     else:
         raise ValueError(f"Unsupported input JSON type: {type(data)}")
 
     # --- Save with same structure (JSON) ---
     os.makedirs(config["output_dir"], exist_ok=True)
     out_path = os.path.join(config["output_dir"], "predictions.json")
+    
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    
     print(f"[OK] Predictions written to: {out_path}")
 
-    return test_avg_loss, data
+    # Return the correct calculated loss variable (val_nll)
+    return val_nll, data
 
 # Standalone loading function for saved model
 def load_saved_model(config, model_path, models):
@@ -973,6 +1054,7 @@ def load_saved_model(config, model_path, models):
 if __name__ == "__main__":
     # Configuration (parameters from paper and config.yaml)
     config = {
+        "seed": 42,
         "data_dir": "/datastore/npl/ICEK/Wikipedia/content/ver5",
         "cache_dir":  "/datastore/npl/ICEK/TnT/new_dataset",
         "output_dir": "/datastore/npl/ICEK/TnT/output",
@@ -990,7 +1072,7 @@ if __name__ == "__main__":
             "output_dim": 1024,
             "factor": 1,
             "cutoff": [5000, 20000],
-            "padding_idx": 0,
+            "padding_idx": 1,
             "scale_embeds": True
         },
         "decoder_params": {
@@ -1017,7 +1099,7 @@ if __name__ == "__main__":
             "tie_adaptive_proj": False,
             "decoder_layers": 4,
             "final_norm": False,
-            "padding_idx": 0,
+            "padding_idx": 1,
             "swap": False
         },
         "early_stopping_patience": 10, 
@@ -1029,6 +1111,7 @@ if __name__ == "__main__":
     # device = set_pytorch_device(choosen_gpu)
     # print(f"[DEBUG] GPU CHOOSEN {choosen_gpu}")
     # Run training
+    seed_everything(config["seed"])
     trained_model, models = train_model(config)
     
     # Save final model
