@@ -1,3 +1,3 @@
 1. create env pytho 3.9 using requirements.txt
-2. run precompute_npz.py for precomputing data before run
+2. (If you haven't download dataset from hf "NezuMiii/OK-ViWiki-TnT-Dataset" yet) run precompute_npz.py for precomputing data before run
 3. training using main_npz.py (I already config so no need extra parameter)
