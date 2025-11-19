@@ -3,3 +3,4 @@ __pycache__/
 *$py.class
 *.pt
 weights_cache/
+*.out
