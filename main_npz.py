@@ -1063,7 +1063,7 @@ if __name__ == "__main__":
         "embed_dim": 1024,    # Hidden size
         "batch_size": 8,
         "num_workers": 0,
-        "epochs": 100,
+        "epochs": 200,
         "decoding": "beam", 
         "lr": 5e-5,  # Lowered learning rate for stability
         "embedder": {
