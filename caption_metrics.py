@@ -3,7 +3,34 @@ from pycocoevalcap.meteor.meteor import Meteor
 from rouge_score import rouge_scorer
 from pycocoevalcap.cider.cider import Cider
 from tqdm import tqdm
+import py_vncorenlp
 
+def vncore_segment(sentences, vncore):
+    segmented_sentences = []
+    for sentence in sentences:
+        # Handle None or empty
+        if sentence is None:
+            segmented_sentences.append("")
+            continue
+        if not isinstance(sentence, str) or not sentence.strip():
+            segmented_sentences.append("")
+            continue
+
+        try:
+            seg_result = vncore.word_segment(sentence)
+            if isinstance(seg_result, list):
+                # join all segmented sentences into one string
+                seg_text = " ".join(seg_result)
+            else:
+                seg_text = str(seg_result)
+
+            segmented_sentences.append(seg_text)
+
+        except Exception as e:
+            print(f"Skipping segmentation, using raw sentence instead: '{sentence}' due to error: {e}")
+            segmented_sentences.append(sentence)
+
+    return segmented_sentences
 def calculate_bleu_scores(reference_captions, candidate_captions):
     smoothing = SmoothingFunction().method1
 
@@ -47,7 +74,7 @@ def calculate_meteor_scores(reference_captions, candidate_captions):
     return [sum(meteor_scores) / len(meteor_scores)]  
 
 def calculate_rouge_scores(reference_captions, candidate_captions):
-    scorer = rouge_scorer.RougeScorer(['rouge1', 'rougeL'], use_stemmer=True)
+    scorer = rouge_scorer.RougeScorer(['rouge1', 'rougeL'], use_stemmer=False)
     rouge_scores = [
         scorer.score(ref, cand) for ref, cand in tqdm(zip(reference_captions, candidate_captions), total=len(reference_captions), desc="Calculating ROUGE")
     ]
@@ -66,10 +93,12 @@ def calculate_cider_scores(reference_captions, candidate_captions):
     print(f"DONE CIDER")
     return [cider_score]
 
-def evaluate(reference_captions, candidate_captions):
+def evaluate(reference_captions, candidate_captions, vncore):
     print("Starting evaluation...")
-    bleu_scores = calculate_bleu_scores(reference_captions, candidate_captions)
-    meteor_scores = calculate_meteor_scores(reference_captions, candidate_captions)
-    rouge_scores = calculate_rouge_scores(reference_captions, candidate_captions)
-    cider_scores = calculate_cider_scores(reference_captions, candidate_captions)
+    segmented_reference_captions = vncore_segment(reference_captions, vncore)
+    segmented_candidate_captions = vncore_segment(candidate_captions, vncore)
+    bleu_scores = calculate_bleu_scores(segmented_reference_captions, segmented_candidate_captions)
+    meteor_scores = calculate_meteor_scores(segmented_reference_captions, segmented_candidate_captions)
+    rouge_scores = calculate_rouge_scores(segmented_reference_captions, segmented_candidate_captions)
+    cider_scores = calculate_cider_scores(segmented_reference_captions, segmented_candidate_captions)
     return bleu_scores + meteor_scores + rouge_scores + cider_scores
