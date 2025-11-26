@@ -579,13 +579,109 @@ class TransformAndTell(nn.Module):
         # token_ids.shape == [batch_size * beam_size, generate_len]
 
         return log_probs, token_ids, attns
+    
+def run_validation(
+    model,
+    val_loader,
+    criterion,
+    ce_loss,
+    pad_idx,
+    bos_id,
+    eos_id,
+    pad_id,
+    device,
+    _decode_ids,
+    global_step: int,
+    vncore
+):
+    model.eval()
+    val_sum_nll = 0.0
+    val_tokens = 0
+
+    reference_captions = []
+    candidate_captions = []
+
+    with torch.no_grad():
+        for batch in tqdm(val_loader, desc=f"Validating @ step {global_step}", leave=False):
+            caption_ids = batch["caption_ids"].to(device, non_blocking=True)
+            contexts    = {k: v.to(device, non_blocking=True) for k, v in batch["contexts"].items()}
+
+            targets = caption_ids[:, 1:].contiguous().view(-1)
+            num_tokens = (targets != pad_idx).sum()
+            if num_tokens.item() == 0:
+                continue
+
+            loss_contexts   = contexts.copy()
+            loss_caption_ids = caption_ids[:, :-1].clone()
+
+            logits, _ = model(loss_caption_ids, loss_contexts)
+            logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
+            logits = logits - logits.max(dim=-1, keepdim=True)[0]
+            flat_logits = logits.reshape(-1, logits.size(-1))
+
+            outputs, new_targets = criterion(flat_logits, targets)
+
+            batch_sum_nll = 0.0
+            for out, tgt in zip(outputs, new_targets):
+                if out is not None and tgt is not None and tgt.numel() > 0:
+                    batch_sum_nll = batch_sum_nll + ce_loss(out, tgt)
+
+            val_sum_nll += float(batch_sum_nll)
+            val_tokens  += int(num_tokens)
+
+            # ----- Generation for metrics -----
+            B = caption_ids.size(0)
+            _, token_seqs, attns = model._generate(caption_ids, contexts)
+
+            gt_ids_batch   = caption_ids[:, 1:].detach().cpu().tolist()
+            pred_ids_batch = token_seqs[:, 1:].detach().cpu().tolist()
+
+            for gt_ids, pred_ids in zip(gt_ids_batch, pred_ids_batch):
+                reference_captions.append(_decode_ids(gt_ids))
+                candidate_captions.append(_decode_ids(pred_ids))
+
+    val_nll = (val_sum_nll / val_tokens) if val_tokens > 0 else 0.0
+    print(f"[VAL] step {global_step} | Val NLL/token: {val_nll:.4f} | Tokens: {val_tokens}")
+
+    metrics = None
+    if len(reference_captions) > 0:
+        metrics = evaluate(reference_captions, candidate_captions, vncore)
+        bleu1, bleu2, bleu3, bleu4, meteor, rouge1, rougeL, cider = metrics
+        print(
+            f"[VAL] step {global_step} | "
+            f"BLEU-1: {bleu1:.4f} | BLEU-2: {bleu2:.4f} | "
+            f"BLEU-3: {bleu3:.4f} | BLEU-4: {bleu4:.4f} | "
+            f"METEOR: {meteor:.4f} | "
+            f"ROUGE-1: {rouge1:.4f} | ROUGE-L: {rougeL:.4f} | "
+            f"CIDEr: {cider:.4f}"
+        )
+    else:
+        print("[VAL] No captions collected for metrics at this step.")
+
+    return val_nll, metrics
+
 def train_model(config):
 
     print("[DEBUG] STARTING PREP")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # device = "cuda"
     models = setup_models(device, config["vncorenlp_path"])
+    vncore = models["vncore"]
+    # train_loader = DataLoader(
+    #     NewsCaptionDataset(config["data_dir"], config["cache_dir"], "demo20", models),
+    #     shuffle=True,
+    #     num_workers=config["num_workers"],
+    #     collate_fn=pad_and_collate,
+    #     pin_memory=True if torch.cuda.is_available() else False,
+    # )
 
+    # val_loader = DataLoader(
+    #     NewsCaptionDataset(config["data_dir"], config["cache_dir"], "demo20", models),
+    #     batch_size=config["batch_size"],
+    #     shuffle=False,
+    #     num_workers=config["num_workers"],
+    #     collate_fn=pad_and_collate,
+    #     pin_memory=True if torch.cuda.is_available() else False,
+    # )
     train_loader = DataLoader(
         NewsCaptionDataset(config["data_dir"], config["cache_dir"], "train", models),
         shuffle=True,
@@ -620,14 +716,58 @@ def train_model(config):
         decoder_params=config["decoder_params"]
     ).to(device)
     print("TransformAndTell LOADED!")
-    optimizer = torch.optim.Adam(
+
+    # ==========================
+    # OPTIMIZER & SCHEDULE (BERT-STYLE)
+    # ==========================
+    opt_cfg = config.get("optimizer", {})
+
+    base_lr       = opt_cfg.get("lr", 1e-4)
+    b1            = opt_cfg.get("b1", 0.9)
+    b2            = opt_cfg.get("b2", 0.98)
+    eps           = opt_cfg.get("e", 1e-6)
+    weight_decay  = opt_cfg.get("weight_decay", 1e-5)
+    warmup_frac   = opt_cfg.get("warmup", 0.05)
+    t_total       = int(opt_cfg.get("t_total", 0))  # total training steps
+    schedule_type = opt_cfg.get("schedule", "warmup_linear")
+    max_grad_norm = opt_cfg.get("max_grad_norm", 0.1)
+
+    # AdamW is the usual "BERT Adam" variant
+    optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=config["lr"],
-        betas=(0.9, 0.98),
-        eps=1e-6,
-        weight_decay=1e-5
+        lr=base_lr,
+        betas=(b1, b2),
+        eps=eps,
+        weight_decay=weight_decay,
     )
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
+
+    # If t_total not set, fall back to epochs * steps per epoch
+    if t_total <= 0:
+        # NOTE: this assumes full epoch length is used
+        steps_per_epoch = max(1, len(train_loader))
+        t_total = steps_per_epoch * config["epochs"] 
+
+    warmup_steps = int(warmup_frac * t_total)
+
+    def lr_scale_fn(step: int) -> float:
+        """
+        Warmup + linear decay, like 'warmup_linear' in BERT.
+        step is 1-based global step.
+        """
+        if step <= 0:
+            return 0.0
+        if step < warmup_steps:
+            return float(step) / max(1.0, warmup_steps)
+        # linear decay after warmup
+        if step >= t_total:
+            return 0.0
+        return max(
+            0.0,
+            float(t_total - step) / max(1.0, t_total - warmup_steps)
+        )
+
+    print("[DEBUG] OPTIMIZER + WARMUP_LINEAR SCHED LOADED!")  
+
     criterion = AdaptiveSoftmax(
         vocab_size=config["vocab_size"],
         input_dim=config["decoder_params"]["decoder_output_dim"],
@@ -647,6 +787,7 @@ def train_model(config):
     ce_loss = nn.CrossEntropyLoss(
         ignore_index=config["decoder_params"]["padding_idx"], reduction="sum"
     )
+
     # --- IDs & decoding params ---
     bos_id = int(config["decoder_params"].get("bos_idx", 0))
     eos_id = int(config["decoder_params"].get("eos_idx", 2))
@@ -664,7 +805,6 @@ def train_model(config):
     vocab = models.get("vocab")
 
     def _decode_ids(ids):
-        # strip after EOS, drop PAD
         clean = []
         for t in ids:
             if t == pad_id:
@@ -693,18 +833,22 @@ def train_model(config):
             )
 
         return " ".join(map(str, clean))
+
     print(f"[DEBUG] num of epoch: {config['epochs']}")
+
+    # global step for warmup_linear
+    global_step = 0  
+    validate_every = int(config.get("validate_every_steps", 40000))  # default 30k
+    print(f"[DEBUG] Validate every {validate_every} steps")
 
     for epoch in range(config["epochs"]):
         model.train()
-        total_token_nll = 0.0  # summed NLL over the epoch
+        total_token_nll = 0.0
         total_tokens = 0
         total_grad_norm = 0.0
         num_batches = 0
 
         for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}"):
-            # caption_ids = batch["caption_ids"].to(device)
-            # contexts = {k: v.to(device) for k, v in batch["contexts"].items()}
             caption_ids = batch["caption_ids"].to(device, non_blocking=True)
             contexts    = {k: v.to(device, non_blocking=True) for k, v in batch["contexts"].items()}
             
@@ -719,7 +863,6 @@ def train_model(config):
             logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
             logits = logits - logits.max(dim=-1, keepdim=True)[0]
             
-            # Flatten to [B*(T-1), D] for AdaptiveSoftmax
             flat_logits = logits.reshape(-1, logits.size(-1))
             outputs, new_targets = criterion(flat_logits, targets)
             
@@ -732,24 +875,72 @@ def train_model(config):
             if not torch.isfinite(loss):
                 print(f"[WARN] Non-finite loss; skipping batch.")
                 continue
+
             loss.backward()
-            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # why: stabilize updates
+
+            # ---- Grad clipping with max_grad_norm from config ----
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), max_grad_norm
+            )  
+
+            # ---- Update LR with warmup_linear schedule ----
+            global_step += 1                                       
+            if schedule_type == "warmup_linear" and t_total > 0:   
+                scale = lr_scale_fn(global_step)                   
+                for group in optimizer.param_groups:               
+                    group["lr"] = base_lr * scale                  
+
             optimizer.step()
 
             total_grad_norm += float(grad_norm)
             num_batches += 1
             total_token_nll += float(sum_loss.detach())
             total_tokens += int(num_tokens.detach())
+            # ==========================
+            # STEP-BASED VALIDATION
+            # ==========================
+            if global_step % validate_every == 0 or global_step == t_total:
+                print(f"[DEBUG] Running validation at step {global_step}")
+                val_nll, metrics = run_validation(
+                    model=model,
+                    val_loader=val_loader,
+                    criterion=criterion,
+                    ce_loss=ce_loss,
+                    pad_idx=pad_idx,
+                    bos_id=bos_id,
+                    eos_id=eos_id,
+                    pad_id=pad_id,
+                    device=device,
+                    _decode_ids=_decode_ids,
+                    global_step=global_step,
+                    vncore=vncore
+                )
+
+                # Early stopping now works on "validation calls" instead of epochs
+                if early_stopper.early_stop(val_nll):
+                    print(f"Early stopping triggered at step {global_step}!")
+                    # Optional: save last model before breaking
+                    os.makedirs(config["output_dir"], exist_ok=True)
+                    torch.save(model.state_dict(), os.path.join(config["output_dir"], "best_model_last.pth"))
+                    return model, models
+
+                if val_nll < best_val_loss:
+                    best_val_loss = val_nll
+                    os.makedirs(config["output_dir"], exist_ok=True)
+                    torch.save(model.state_dict(), os.path.join(config["output_dir"], "best_model.pth"))
+                    print(f"Saved new best model at step {global_step}")
         
         train_avg_nll = (total_token_nll / total_tokens) if total_tokens > 0 else 0.0
         avg_grad_norm = (total_grad_norm / num_batches) if num_batches > 0 else 0.0
         print(f"Epoch {epoch+1} | Train NLL/token: {train_avg_nll:.4f} | Tokens: {total_tokens} | AvgGradNorm: {avg_grad_norm:.6f}")
 
+        # ======================
+        # VALIDATION
+        # ======================
         model.eval()
         val_sum_nll = 0.0
         val_tokens = 0
 
-        # For metrics
         reference_captions = []
         candidate_captions = []
 
@@ -762,9 +953,10 @@ def train_model(config):
                 num_tokens = (targets != pad_idx).sum()
                 if num_tokens.item() == 0:
                     continue
+
                 loss_contexts = contexts.copy()
                 loss_caption_ids = caption_ids[:, :-1].clone()
-                # ----- Loss (same as before) -----
+
                 logits, _ = model(loss_caption_ids, loss_contexts)
                 logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
                 logits = logits - logits.max(dim=-1, keepdim=True)[0]
@@ -779,13 +971,12 @@ def train_model(config):
 
                 val_sum_nll += float(batch_sum_nll)
                 val_tokens += int(num_tokens)
-                print("[DEBUG] DONE LOSS")
+
                 # ----- Generation for metrics -----
                 B = caption_ids.size(0)
                 start_ids = torch.full((B, 1), bos_id, dtype=torch.long, device=device)
                 _, token_seqs, attns = model._generate(caption_ids, contexts)
 
-                # remove BOS token before decoding
                 gt_ids_batch   = caption_ids[:, 1:].detach().cpu().tolist()
                 pred_ids_batch = token_seqs[:, 1:].detach().cpu().tolist()
 
@@ -798,7 +989,7 @@ def train_model(config):
 
         # ===== Text metrics =====
         if len(reference_captions) > 0:
-            metrics = evaluate(reference_captions, candidate_captions)
+            metrics = evaluate(reference_captions, candidate_captions, vncore)
             bleu1, bleu2, bleu3, bleu4, meteor, rouge1, rougeL, cider = metrics
             print(
                 f"Epoch {epoch+1} | "
@@ -811,8 +1002,9 @@ def train_model(config):
         else:
             print("No captions collected for metrics this epoch.")
 
+        # NOTE: we removed ReduceLROnPlateau scheduler.step(val_nll)
+        # because LR is now controlled per-step by warmup_linear.  
 
-        scheduler.step(val_nll)
         if early_stopper.early_stop(val_nll):
             print(f"Early stopping triggered after {epoch+1} epochs!")
             break
@@ -825,6 +1017,7 @@ def train_model(config):
 
     return model, models
 
+
 def evaluate_model(model, models, config):
     """
     Evaluate with the new generate() and emit a predictions file that matches
@@ -835,7 +1028,7 @@ def evaluate_model(model, models, config):
     import torch
     import torch.nn as nn
     from torch.utils.data import DataLoader
-
+    vncore = models["vncore"]
     device = next(model.parameters()).device
 
     # --- Dataset / Loader ---
@@ -958,7 +1151,7 @@ def evaluate_model(model, models, config):
 
     # ===== Text metrics =====
     if len(reference_captions) > 0:
-        metrics = evaluate(reference_captions, candidate_captions)
+        metrics = evaluate(reference_captions, candidate_captions, vncore)
         bleu1, bleu2, bleu3, bleu4, meteor, rouge1, rougeL, cider = metrics
         print(
             f"BLEU-1: {bleu1:.4f} | BLEU-2: {bleu2:.4f} | "
@@ -1056,16 +1249,16 @@ if __name__ == "__main__":
     config = {
         "seed": 42,
         "data_dir": "/datastore/npl/ICEK/Wikipedia/content/ver5",
-        "cache_dir":  "/datastore/npl/ICEK/TnT/new_dataset",
-        "output_dir": "/datastore/npl/ICEK/TnT/output",
+        "cache_dir":  "/datastore/npl/ICEK/TnT/dataset",
+        "output_dir": "/datastore/npl/ICEK/TnT/output/v2",
         "vncorenlp_path": "/datastore/npl/ICEK/VnCoreNLP",
         "vocab_size": 64001,  # From phoBERT-base tokenizer
         "embed_dim": 1024,    # Hidden size
-        "batch_size": 8,
+        "batch_size": 32,
         "num_workers": 0,
         "epochs": 200,
         "decoding": "beam", 
-        "lr": 5e-5,  # Lowered learning rate for stability
+        "lr": 0.0001,  # Lowered learning rate for stability
         "embedder": {
             "vocab_size": 64001,
             "initial_dim": 1024,
