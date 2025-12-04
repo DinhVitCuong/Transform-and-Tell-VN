@@ -696,7 +696,6 @@ def train_model(config):
         batch_size=config["batch_size"],
         shuffle=False,
         num_workers=config["num_workers"],
-        batch_size=config["batch_size"], 
         collate_fn=pad_and_collate,
         pin_memory=True if torch.cuda.is_available() else False,
     )
