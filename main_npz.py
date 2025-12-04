@@ -686,6 +686,7 @@ def train_model(config):
         NewsCaptionDataset(config["data_dir"], config["cache_dir"], "train", models),
         shuffle=True,
         num_workers=config["num_workers"],
+        batch_size=config["batch_size"], 
         collate_fn=pad_and_collate,
         pin_memory=True if torch.cuda.is_available() else False,
     )
@@ -695,6 +696,7 @@ def train_model(config):
         batch_size=config["batch_size"],
         shuffle=False,
         num_workers=config["num_workers"],
+        batch_size=config["batch_size"], 
         collate_fn=pad_and_collate,
         pin_memory=True if torch.cuda.is_available() else False,
     )
@@ -726,8 +728,8 @@ def train_model(config):
     b1            = opt_cfg.get("b1", 0.9)
     b2            = opt_cfg.get("b2", 0.98)
     eps           = opt_cfg.get("e", 1e-6)
-    weight_decay  = opt_cfg.get("weight_decay", 1e-5)
-    warmup_frac   = opt_cfg.get("warmup", 0.05)
+    weight_decay  = opt_cfg.get("weight_decay", 0.00001)
+    warmup_frac   = opt_cfg.get("warmup", 0.01)
     t_total       = int(opt_cfg.get("t_total", 0))  # total training steps
     schedule_type = opt_cfg.get("schedule", "warmup_linear")
     max_grad_norm = opt_cfg.get("max_grad_norm", 0.1)
@@ -1249,16 +1251,16 @@ if __name__ == "__main__":
     config = {
         "seed": 42,
         "data_dir": "/datastore/npl/ICEK/Wikipedia/content/ver5",
-        "cache_dir":  "/datastore/npl/ICEK/TnT/dataset",
-        "output_dir": "/datastore/npl/ICEK/TnT/output/v2",
+        "cache_dir":  "/datastore/npl/ICEK/TnT/new_dataset",
+        "output_dir": "/datastore/npl/ICEK/TnT/output/v3",
         "vncorenlp_path": "/datastore/npl/ICEK/VnCoreNLP",
         "vocab_size": 64001,  # From phoBERT-base tokenizer
         "embed_dim": 1024,    # Hidden size
         "batch_size": 32,
         "num_workers": 0,
-        "epochs": 200,
+        "epochs": 100,
         "decoding": "beam", 
-        "lr": 0.0001,  # Lowered learning rate for stability
+        "lr": 0.0001,  
         "embedder": {
             "vocab_size": 64001,
             "initial_dim": 1024,
