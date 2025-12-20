@@ -66,7 +66,7 @@ def seed_everything(seed: int):
 def pad_and_collate(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     from torch.nn.utils.rnn import pad_sequence
 
-    def pad_list(xs: List[torch.Tensor], pad_val=0, dtype=None) -> torch.Tensor:
+    def pad_list(xs: List[torch.Tensor], pad_val=1, dtype=None) -> torch.Tensor:
         if dtype is not None:
             xs = [x.to(dtype) for x in xs]
         return pad_sequence(xs, batch_first=True, padding_value=pad_val)
@@ -82,7 +82,7 @@ def pad_and_collate(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         "article_mask":pad_list([b["contexts"]["article_mask"] for b in batch], True).to(bool),# [B,S]
     }
 
-    caption_ids = pad_list([b["caption_ids"] for b in batch], 0, dtype=torch.long)           # [B,T]
+    caption_ids = pad_list([b["caption_ids"] for b in batch], 1, dtype=torch.long)           # [B,T]
     ids = torch.tensor([b["id"] for b in batch], dtype=torch.long)
 
     return {"contexts": contexts, "caption_ids": caption_ids, "ids": ids}
@@ -534,22 +534,27 @@ class TransformAndTell(nn.Module):
             lprobs = lprobs.squeeze(1)
             # lprobs.shape == [batch_size, vocab_size]
 
-            topk_lprobs, topk_indices = lprobs.topk(self.sampling_topk)
-            topk_lprobs = topk_lprobs.div_(self.sampling_temp)
-            # topk_lprobs.shape == [batch_size, topk]
+            # BEAM
+            # topk_lprobs, topk_indices = lprobs.topk(self.sampling_topk)
+            # topk_lprobs = topk_lprobs.div_(self.sampling_temp)
+            # # topk_lprobs.shape == [batch_size, topk]
 
-            # Take a random sample from those top k
-            topk_probs = topk_lprobs.exp()
-            sampled_index = torch.multinomial(topk_probs, num_samples=1)
-            # sampled_index.shape == [batch_size, 1]
+            # # Take a random sample from those top k
+            # topk_probs = topk_lprobs.exp()
+            # sampled_index = torch.multinomial(topk_probs, num_samples=1)
+            # # sampled_index.shape == [batch_size, 1]
 
-            selected_lprob = topk_lprobs.gather(
-                dim=-1, index=sampled_index)
-            # selected_prob.shape == [batch_size, 1]
+            # selected_lprob = topk_lprobs.gather(
+            #     dim=-1, index=sampled_index)
+            # # selected_prob.shape == [batch_size, 1]
 
-            selected_index = topk_indices.gather(
-                dim=-1, index=sampled_index)
-            # selected_index.shape == [batch_size, 1]
+            # selected_index = topk_indices.gather(
+            #     dim=-1, index=sampled_index)
+            # # selected_index.shape == [batch_size, 1]
+            
+            # GREEDY
+            selected_index = lprobs.argmax(dim=-1, keepdim=True)  # [B_active, 1]
+            selected_lprob = lprobs.gather(dim=-1, index=selected_index)  # [B_active, 1]
 
             log_prob = selected_lprob.new_zeros(B, 1)
             log_prob[full_active_idx] = selected_lprob
@@ -615,8 +620,8 @@ def run_validation(
             loss_caption_ids = caption_ids[:, :-1].clone()
 
             logits, _ = model(loss_caption_ids, loss_contexts)
-            logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
-            logits = logits - logits.max(dim=-1, keepdim=True)[0]
+            # logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
+            # logits = logits - logits.max(dim=-1, keepdim=True)[0]
             flat_logits = logits.reshape(-1, logits.size(-1))
 
             outputs, new_targets = criterion(flat_logits, targets)
@@ -723,15 +728,15 @@ def train_model(config):
     # ==========================
     opt_cfg = config.get("optimizer", {})
 
-    base_lr       = opt_cfg.get("lr", 1e-4)
+    base_lr       = opt_cfg.get("lr", 1e-5)
     b1            = opt_cfg.get("b1", 0.9)
     b2            = opt_cfg.get("b2", 0.98)
     eps           = opt_cfg.get("e", 1e-6)
     weight_decay  = opt_cfg.get("weight_decay", 0.00001)
-    warmup_frac   = opt_cfg.get("warmup", 0.01)
+    warmup_frac   = opt_cfg.get("warmup", 0.1)
     t_total       = int(opt_cfg.get("t_total", 0))  # total training steps
     schedule_type = opt_cfg.get("schedule", "warmup_linear")
-    max_grad_norm = opt_cfg.get("max_grad_norm", 0.1)
+    max_grad_norm = opt_cfg.get("max_grad_norm", 0.5)
 
     # AdamW is the usual "BERT Adam" variant
     optimizer = torch.optim.AdamW(
@@ -861,8 +866,8 @@ def train_model(config):
             optimizer.zero_grad(set_to_none=True)
             logits, _ = model(caption_ids[:, :-1], contexts)
             
-            logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
-            logits = logits - logits.max(dim=-1, keepdim=True)[0]
+            # logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
+            # logits = logits - logits.max(dim=-1, keepdim=True)[0]
             
             flat_logits = logits.reshape(-1, logits.size(-1))
             outputs, new_targets = criterion(flat_logits, targets)
@@ -959,8 +964,8 @@ def train_model(config):
                 loss_caption_ids = caption_ids[:, :-1].clone()
 
                 logits, _ = model(loss_caption_ids, loss_contexts)
-                logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
-                logits = logits - logits.max(dim=-1, keepdim=True)[0]
+                # logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
+                # logits = logits - logits.max(dim=-1, keepdim=True)[0]
                 flat_logits = logits.reshape(-1, logits.size(-1))
 
                 outputs, new_targets = criterion(flat_logits, targets)
@@ -1120,8 +1125,8 @@ def evaluate_model(model, models, config):
             loss_caption_ids = caption_ids[:, :-1].clone()
             # ----- Loss (same as before) -----
             logits, _ = model(loss_caption_ids, loss_contexts)
-            logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
-            logits = logits - logits.max(dim=-1, keepdim=True)[0]
+            # logits = torch.nan_to_num(logits, nan=0.0, posinf=100.0, neginf=-100.0)
+            # logits = logits - logits.max(dim=-1, keepdim=True)[0]
             flat_logits = logits.reshape(-1, logits.size(-1))
 
             outputs, new_targets = criterion(flat_logits, targets)
@@ -1251,11 +1256,11 @@ if __name__ == "__main__":
         "seed": 42,
         "data_dir": "/datastore/npl/ICEK/Wikipedia/content/ver5",
         "cache_dir":  "/datastore/npl/ICEK/TnT/new_dataset",
-        "output_dir": "/datastore/npl/ICEK/TnT/output/v3",
+        "output_dir": "/datastore/npl/ICEK/TnT/output/v5",
         "vncorenlp_path": "/datastore/npl/ICEK/VnCoreNLP",
         "vocab_size": 64001,  # From phoBERT-base tokenizer
         "embed_dim": 1024,    # Hidden size
-        "batch_size": 32,
+        "batch_size": 16,
         "num_workers": 0,
         "epochs": 100,
         "decoding": "beam", 
